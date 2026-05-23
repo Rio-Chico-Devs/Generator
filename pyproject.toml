@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vihente-forge"
+version = "0.1.0"
+description = "App desktop offline per generazione immagini con stile personale appreso"
+authors = [{name = "Bru"}]
+requires-python = ">=3.11,<3.12"
+readme = "README.md"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "A", "C4", "PIE", "SIM", "RET"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ["py311"]
+
+[tool.pytest.ini_options]
+markers = [
+    "slow: tests that require GPU and take long",
+    "gpu: tests requiring CUDA",
+]
+testpaths = ["tests"]

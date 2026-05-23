@@ -1,0 +1,37 @@
+# UI
+PyQt6==6.7.1
+PyQt6-Qt6==6.7.2
+
+# Inference engine
+diffusers==0.30.3
+transformers==4.44.2
+accelerate==0.33.0
+safetensors==0.4.5
+huggingface-hub==0.24.6
+
+# Image processing
+Pillow==10.4.0
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+
+# Tagging (ONNX) - GPU se disponibile, fallback CPU automatico
+onnxruntime-gpu==1.19.2
+onnx==1.16.2
+
+# Training support
+xformers==0.0.27.post2
+bitsandbytes==0.43.3
+prodigyopt==1.0
+lion-pytorch==0.2.2
+
+# Upscaler
+realesrgan==0.3.0
+basicsr==1.4.2
+
+# Utility
+toml==0.10.2
+psutil==6.0.0
+watchdog==4.0.2
+websocket-client==1.8.0
+send2trash==1.8.3
+pydantic==2.9.2

@@ -1,0 +1,140 @@
+/* Vihente Forge — Tema scuro
+ * Palette ispirata all'estetica neumorphic dark di RCS Carbonio,
+ * più sobria. Niente accenti gialli intrusivi nell'UI principale.
+ */
+
+QMainWindow,
+QWidget {
+    background-color: #181a1f;
+    color: #d8dade;
+    font-family: "Inter", "Segoe UI", sans-serif;
+    font-size: 13px;
+}
+
+QToolBar {
+    background: #1f222a;
+    border: none;
+    padding: 4px;
+    spacing: 4px;
+}
+
+QToolBar QToolButton {
+    background: transparent;
+    color: #c8cad0;
+    padding: 6px 12px;
+    border-radius: 4px;
+}
+
+QToolBar QToolButton:hover {
+    background: #2a2d36;
+    color: #ffffff;
+}
+
+QToolBar QToolButton:pressed {
+    background: #353944;
+}
+
+QStatusBar {
+    background: #14161b;
+    color: #8a8d96;
+    border-top: 1px solid #2a2d36;
+}
+
+QListWidget {
+    background: #1c1e25;
+    border: 1px solid #2a2d36;
+    border-radius: 4px;
+    padding: 4px;
+}
+
+QListWidget::item {
+    padding: 8px;
+    border-radius: 3px;
+}
+
+QListWidget::item:selected {
+    background: #2d3140;
+    color: #ffffff;
+}
+
+QListWidget::item:hover {
+    background: #24272f;
+}
+
+QPushButton {
+    background: #2a2d36;
+    color: #d8dade;
+    border: 1px solid #353944;
+    border-radius: 4px;
+    padding: 8px 14px;
+    font-weight: 500;
+}
+
+QPushButton:hover {
+    background: #353944;
+}
+
+QPushButton:pressed {
+    background: #1f222a;
+}
+
+QPushButton:disabled {
+    color: #5a5d66;
+    background: #20222a;
+}
+
+QLineEdit,
+QTextEdit,
+QPlainTextEdit {
+    background: #14161b;
+    color: #e0e2e8;
+    border: 1px solid #2a2d36;
+    border-radius: 4px;
+    padding: 6px;
+}
+
+QLineEdit:focus,
+QTextEdit:focus {
+    border-color: #4a5a7a;
+}
+
+QLabel {
+    color: #d8dade;
+}
+
+QSplitter::handle {
+    background: #2a2d36;
+}
+
+QSplitter::handle:horizontal {
+    width: 1px;
+}
+
+QProgressBar {
+    background: #14161b;
+    border: 1px solid #2a2d36;
+    border-radius: 3px;
+    text-align: center;
+    color: #d8dade;
+}
+
+QProgressBar::chunk {
+    background: #4a6a9a;
+    border-radius: 2px;
+}
+
+QScrollBar:vertical {
+    background: #14161b;
+    width: 10px;
+}
+
+QScrollBar::handle:vertical {
+    background: #353944;
+    border-radius: 3px;
+    min-height: 30px;
+}
+
+QScrollBar::add-line:vertical,
+QScrollBar::sub-line:vertical {
+    height: 0px;
+}
