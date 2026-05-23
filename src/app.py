@@ -5,7 +5,6 @@ import argparse
 import logging
 import sys
 
-from PyQt6.QtCore import QCoreApplication, Qt
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
@@ -63,9 +62,6 @@ def run_app(argv: list[str]) -> int:
     args = _parse_args(argv)
     _setup_logging(args.debug)
     logger.info("Vihente Forge starting up (mock=%s, debug=%s)", args.mock, args.debug)
-
-    # Qt high-DPI handling (default in Qt6, ma esplicitiamo)
-    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, True)
 
     app = QApplication(argv)
     app.setApplicationName("Vihente Forge")
