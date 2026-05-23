@@ -24,6 +24,7 @@ class ComfyClientProtocol(Protocol):
         self, prompt_id: str, progress_callback: Optional[Callable[[int, int], None]]
     ) -> list[Path]: ...
     def interrupt(self) -> None: ...
+    def get_vram_usage(self) -> dict: ...
 
 
 class ComfyClient:
@@ -100,6 +101,17 @@ class ComfyClient:
         req = urllib.request.Request(f"{self._base}/interrupt", data=b"")
         urllib.request.urlopen(req, timeout=10)
 
+    def get_vram_usage(self) -> dict:
+        """GET /system_stats per la status bar. Ritorna {} se irraggiungibile."""
+        import urllib.error
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(f"{self._base}/system_stats", timeout=3) as r:
+                return json.loads(r.read())
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            return {}
+
     def _fetch_outputs(self, prompt_id: str) -> list[Path]:
         import urllib.request
 
@@ -161,6 +173,17 @@ class MockComfyClient:
 
     def interrupt(self) -> None:
         pass
+
+    def get_vram_usage(self) -> dict:
+        return {
+            "devices": [
+                {
+                    "name": "Mock GPU",
+                    "vram_total": 8 * 1024**3,
+                    "vram_free": 6 * 1024**3,
+                }
+            ]
+        }
 
     def _make_placeholder(self, prompt_id: str) -> Path:
         from PIL import Image, ImageDraw
