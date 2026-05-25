@@ -17,6 +17,66 @@ from typing import Callable, Optional, Protocol
 logger = logging.getLogger(__name__)
 
 
+# --- Eccezioni tipizzate ---------------------------------------------------
+
+
+class ComfyError(RuntimeError):
+    """Errore generico lato ComfyUI (submit rifiutato, esecuzione fallita)."""
+
+
+class ComfyInterrupted(ComfyError):
+    """L'esecuzione è stata interrotta su richiesta (interrupt())."""
+
+
+class ComfyOutOfMemory(ComfyError):
+    """ComfyUI è andato in out-of-memory (VRAM insufficiente)."""
+
+
+_OOM_MARKERS = (
+    "out of memory",
+    "outofmemory",
+    "cuda out of memory",
+    "allocation on device",
+    "alloc_pool",
+)
+
+
+def _looks_like_oom(text: str) -> bool:
+    t = (text or "").lower()
+    return any(marker in t for marker in _OOM_MARKERS)
+
+
+def _format_submit_error(body: str) -> str:
+    """Estrae un messaggio leggibile dal corpo d'errore di /prompt.
+
+    ComfyUI risponde con ``{"error": {...}, "node_errors": {...}}``: senza
+    questo parsing l'utente vedrebbe solo "HTTP Error 400".
+    """
+    if not body:
+        return ""
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, TypeError):
+        return body.strip()[:300]
+
+    parts: list[str] = []
+    err = data.get("error")
+    if isinstance(err, dict) and err.get("message"):
+        msg = err["message"]
+        details = err.get("details")
+        parts.append(f"{msg} ({details})" if details else str(msg))
+    elif isinstance(err, str):
+        parts.append(err)
+
+    node_errors = data.get("node_errors") or {}
+    for node_id, info in node_errors.items():
+        klass = info.get("class_type", "?") if isinstance(info, dict) else "?"
+        for e in (info.get("errors", []) if isinstance(info, dict) else []):
+            parts.append(f"[nodo {node_id} {klass}] {e.get('message', '')}".strip())
+
+    return " · ".join(p for p in parts if p)
+
+
 class ComfyClientProtocol(Protocol):
     def is_alive(self) -> bool: ...
     def submit(self, workflow: dict) -> str: ...
@@ -47,6 +107,7 @@ class ComfyClient:
             return False
 
     def submit(self, workflow: dict) -> str:
+        import urllib.error
         import urllib.request
 
         payload = json.dumps(
@@ -57,9 +118,29 @@ class ComfyClient:
             data=payload,
             headers={"Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(req, timeout=30) as r:
-            data = json.loads(r.read())
-        prompt_id = data["prompt_id"]
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                data = json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            # ComfyUI mette i dettagli della validazione nel corpo (HTTP 400):
+            # senza leggerli l'utente vedrebbe solo "HTTP Error 400".
+            body = ""
+            try:
+                body = e.read().decode("utf-8", "replace")
+            except Exception:
+                pass
+            raise ComfyError(
+                f"ComfyUI ha rifiutato il workflow: {_format_submit_error(body) or e}"
+            ) from e
+        except urllib.error.URLError as e:
+            raise ComfyError(f"ComfyUI non raggiungibile: {e.reason}") from e
+
+        prompt_id = data.get("prompt_id")
+        if not prompt_id:
+            # Validazione fallita ma con 200: node_errors nel corpo.
+            raise ComfyError(
+                f"Workflow non valido: {_format_submit_error(json.dumps(data)) or data}"
+            )
         logger.info("Workflow submitted, prompt_id=%s", prompt_id)
         return prompt_id
 
@@ -67,33 +148,100 @@ class ComfyClient:
         self,
         prompt_id: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        idle_timeout: float = 120.0,
     ) -> list[Path]:
-        """Ascolta WebSocket per progress, ritorna path immagini prodotte."""
+        """Ascolta il WebSocket per il progresso, ritorna le immagini prodotte.
+
+        Robustezza contro i crash silenziosi:
+        - ``execution_error``  → solleva ComfyError/ComfyOutOfMemory col motivo;
+        - ``execution_interrupted`` → solleva ComfyInterrupted;
+        - silenzio per ``idle_timeout`` secondi → watchdog: se il prompt è già
+          in history procede, se ComfyUI non risponde più solleva, altrimenti
+          (ancora vivo, nodo lungo) continua ad attendere.
+
+        Senza queste protezioni un OOM o un crash di ComfyUI lasciavano il
+        thread appeso per sempre con la progress bar ferma.
+        """
         import websocket  # websocket-client
 
         ws = websocket.WebSocket()
-        ws.connect(f"ws://{self.host}:{self.port}/ws?clientId={self.client_id}")
+        ws.settimeout(idle_timeout)
+        try:
+            ws.connect(f"ws://{self.host}:{self.port}/ws?clientId={self.client_id}")
+        except (OSError, websocket.WebSocketException) as e:
+            raise ComfyError(f"Connessione WebSocket a ComfyUI fallita: {e}") from e
 
         try:
             while True:
-                msg = ws.recv()
+                try:
+                    msg = ws.recv()
+                except websocket.WebSocketTimeoutException:
+                    if self._is_finished(prompt_id):
+                        break  # completato, ma il messaggio finale è andato perso
+                    if not self.is_alive():
+                        raise ComfyError(
+                            "ComfyUI non risponde più (possibile crash). "
+                            "Controlla logs/comfyui.log."
+                        )
+                    continue  # ancora vivo: nodo lungo, continua ad attendere
+                except websocket.WebSocketConnectionClosedException:
+                    if self._is_finished(prompt_id):
+                        break
+                    raise ComfyError(
+                        "Connessione a ComfyUI chiusa durante l'esecuzione "
+                        "(possibile crash). Controlla logs/comfyui.log."
+                    )
+
                 if not isinstance(msg, str):
-                    continue
+                    continue  # frame binario (anteprima) — ignora
                 data = json.loads(msg)
                 mtype = data.get("type")
+                d = data.get("data") or {}
 
                 if mtype == "progress":
-                    d = data["data"]
-                    if progress_callback:
+                    if progress_callback and "value" in d and "max" in d:
                         progress_callback(d["value"], d["max"])
                 elif mtype == "executing":
-                    d = data["data"]
                     if d.get("node") is None and d.get("prompt_id") == prompt_id:
                         break  # esecuzione completata
+                elif mtype == "execution_interrupted" and d.get("prompt_id") == prompt_id:
+                    raise ComfyInterrupted("Esecuzione interrotta.")
+                elif mtype == "execution_error" and d.get("prompt_id") == prompt_id:
+                    raise self._build_execution_error(d)
         finally:
-            ws.close()
+            try:
+                ws.close()
+            except Exception:
+                pass
 
         return self._fetch_outputs(prompt_id)
+
+    @staticmethod
+    def _build_execution_error(d: dict) -> ComfyError:
+        node_type = d.get("node_type", "?")
+        exc_msg = d.get("exception_message", "errore sconosciuto")
+        exc_type = d.get("exception_type", "")
+        if _looks_like_oom(f"{exc_type} {exc_msg}"):
+            return ComfyOutOfMemory(
+                f"Memoria GPU insufficiente (OOM) sul nodo '{node_type}'. "
+                "Prova a ridurre la risoluzione, generare una sola immagine "
+                "per volta, o impostare comfy_vram_mode='lowvram'."
+            )
+        return ComfyError(f"Esecuzione fallita sul nodo '{node_type}': {exc_msg}")
+
+    def _is_finished(self, prompt_id: str) -> bool:
+        """True se il prompt risulta completato in history."""
+        import urllib.error
+        import urllib.request
+
+        try:
+            with urllib.request.urlopen(
+                f"{self._base}/history/{prompt_id}", timeout=10
+            ) as r:
+                hist = json.loads(r.read())
+            return prompt_id in hist
+        except (urllib.error.URLError, OSError, json.JSONDecodeError):
+            return False
 
     def interrupt(self) -> None:
         import urllib.request
