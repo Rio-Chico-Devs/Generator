@@ -34,7 +34,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--mock",
         action="store_true",
-        help="Mock pipeline (no GPU). Per sviluppo UI senza modelli.",
+        help="MockComfyClient (no GPU, no ComfyUI). Per sviluppo UI senza modelli.",
     )
     parser.add_argument(
         "--data-dir",
