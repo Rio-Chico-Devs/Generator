@@ -24,7 +24,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -46,6 +46,36 @@ from src.core.project import Project
 from src.utils.paths import ensure_user_dirs, get_projects_dir
 
 logger = logging.getLogger(__name__)
+
+
+class _GpuPoller(QThread):
+    """Polling GPU in un thread separato.
+
+    ``read_gpu()`` lancia ``nvidia-smi`` (subprocess bloccante): se girasse
+    nel main thread tramite QTimer, ogni lettura congelerebbe la UI. Qui
+    gira fuori dal main thread ed emette lo snapshot via signal, che Qt
+    consegna in modo thread-safe allo slot nel main thread.
+    """
+
+    snapshot = pyqtSignal(object)  # GpuSnapshot
+
+    def __init__(self, interval_sec: float = 2.0, parent=None) -> None:
+        super().__init__(parent)
+        self._interval = interval_sec
+        self._stop = False
+
+    def run(self) -> None:
+        from src.utils.gpu_monitor import read_gpu
+
+        while not self._stop:
+            self.snapshot.emit(read_gpu())
+            slept = 0.0
+            while slept < self._interval and not self._stop:
+                self.msleep(100)
+                slept += 0.1
+
+    def stop(self) -> None:
+        self._stop = True
 
 
 class _PlaceholderView(QWidget):
@@ -76,6 +106,7 @@ class MainWindow(QMainWindow):
         self.mock = mock
         self.skip_model_check = skip_model_check
         self._current_project: Optional[Project] = None
+        self._last_snap = None  # ultimo GpuSnapshot ricevuto dal poller
 
         ensure_user_dirs()
 
@@ -171,7 +202,7 @@ class MainWindow(QMainWindow):
         try:
             self._current_project = Project.load(Path(path_str))
             self.setWindowTitle(f"Vihente Forge — {self._current_project.name}")
-            self._update_status()
+            self._render_status()
             # In futuro: notifica view per refresh
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Caricamento progetto fallito:\n{e}")
@@ -206,16 +237,21 @@ class MainWindow(QMainWindow):
     # --- Status / first run ------------------------------------------
 
     def _start_gpu_monitor(self) -> None:
-        """Avvia aggiornamento periodico della status bar (ogni 2s)."""
-        from PyQt6.QtCore import QTimer
+        """Avvia il polling GPU in un thread separato (no freeze UI)."""
+        self._gpu_poller = _GpuPoller(interval_sec=2.0, parent=self)
+        self._gpu_poller.snapshot.connect(self._on_gpu_snapshot)
+        self._gpu_poller.start()
+        self._render_status()
 
-        self._gpu_timer = QTimer(self)
-        self._gpu_timer.timeout.connect(self._update_status)
-        self._gpu_timer.start(2000)
-        self._update_status()
+    def _on_gpu_snapshot(self, snap) -> None:
+        """Slot nel main thread: riceve lo snapshot dal poller."""
+        self._last_snap = snap
+        self._render_status()
 
-    def _update_status(self) -> None:
-        from src.utils.gpu_monitor import ThermalState, read_gpu
+    def _render_status(self) -> None:
+        from src.utils.gpu_monitor import GpuSnapshot, ThermalState
+
+        snap = self._last_snap or GpuSnapshot(available=False)
 
         parts = []
         if self.mock:
@@ -225,7 +261,6 @@ class MainWindow(QMainWindow):
         else:
             parts.append("Nessun progetto attivo")
 
-        snap = read_gpu()
         parts.append(snap.status_line())
         self.status_bar.showMessage(" │ ".join(parts))
 
@@ -237,6 +272,14 @@ class MainWindow(QMainWindow):
             ThermalState.HOT: "#d96a6a",    # rosso: throttling hardware attivo
         }.get(snap.thermal_state, "#8a8d96") if snap.available else "#8a8d96"
         self.status_bar.setStyleSheet(f"QStatusBar {{ color: {color}; }}")
+
+    def closeEvent(self, event) -> None:
+        """Ferma il thread di polling GPU prima di chiudere (no thread orfani)."""
+        poller = getattr(self, "_gpu_poller", None)
+        if poller is not None:
+            poller.stop()
+            poller.wait(2000)
+        super().closeEvent(event)
 
     def _maybe_show_first_run_dialog(self) -> None:
         """Wizard primo avvio: download modelli base."""
