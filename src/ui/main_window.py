@@ -22,7 +22,10 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
+
+if TYPE_CHECKING:
+    from src.core.app_config import AppConfig
 
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from PyQt6.QtGui import QAction
@@ -78,6 +81,27 @@ class _GpuPoller(QThread):
         self._stop = True
 
 
+class _ComfyStarter(QThread):
+    """Avvia ComfyUI in background — start() blocca fino a ~60s.
+
+    Il risultato arriva via signal nel main thread (thread-safe).
+    """
+
+    ready = pyqtSignal(int)   # porta su cui ComfyUI risponde
+    failed = pyqtSignal(str)  # messaggio di errore
+
+    def __init__(self, server, parent=None) -> None:
+        super().__init__(parent)
+        self._server = server
+
+    def run(self) -> None:
+        try:
+            port = self._server.start()
+            self.ready.emit(port)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+
+
 class _PlaceholderView(QWidget):
     """Placeholder view per stub Fase 1."""
 
@@ -100,6 +124,7 @@ class MainWindow(QMainWindow):
         self,
         mock: bool = False,
         skip_model_check: bool = False,
+        app_config: Optional["AppConfig"] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
@@ -107,6 +132,13 @@ class MainWindow(QMainWindow):
         self.skip_model_check = skip_model_check
         self._current_project: Optional[Project] = None
         self._last_snap = None  # ultimo GpuSnapshot ricevuto dal poller
+        self._comfy_state = ""  # stringa breve per la status bar
+        self._comfy_server = None
+        self._comfy_starter: Optional[_ComfyStarter] = None
+        self._comfy_client = None
+
+        from src.core.app_config import AppConfig as _AppConfig
+        self._app_config = app_config or _AppConfig()
 
         ensure_user_dirs()
 
@@ -115,6 +147,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._refresh_projects_list()
+        self._start_comfy()
 
         if not skip_model_check:
             self._maybe_show_first_run_dialog()
@@ -236,6 +269,45 @@ class MainWindow(QMainWindow):
 
     # --- Status / first run ------------------------------------------
 
+    def _start_comfy(self) -> None:
+        """Avvia ComfyUI in background (o usa MockClient se mock=True)."""
+        if self.mock:
+            from src.comfy.client import MockComfyClient
+            self._comfy_client = MockComfyClient()
+            self._comfy_state = "mock"
+            self._render_status()
+            return
+
+        from src.comfy.server import ComfyServer
+        self._comfy_server = ComfyServer(
+            vram_mode=self._app_config.comfy_vram_mode,
+            preferred_port=self._app_config.comfy_port,
+        )
+        if not self._comfy_server.is_installed():
+            logger.warning("ComfyUI non installato — generazione non disponibile")
+            self._comfy_state = "non installato"
+            self._render_status()
+            return
+
+        self._comfy_starter = _ComfyStarter(self._comfy_server, parent=self)
+        self._comfy_starter.ready.connect(self._on_comfy_ready)
+        self._comfy_starter.failed.connect(self._on_comfy_failed)
+        self._comfy_state = "avvio..."
+        self._comfy_starter.start()
+        self._render_status()
+
+    def _on_comfy_ready(self, port: int) -> None:
+        from src.comfy.client import ComfyClient
+        self._comfy_client = ComfyClient(port=port)
+        self._comfy_state = f"pronto:{port}"
+        logger.info("ComfyUI pronto su porta %d", port)
+        self._render_status()
+
+    def _on_comfy_failed(self, msg: str) -> None:
+        logger.error("ComfyUI avvio fallito: %s", msg)
+        self._comfy_state = "errore"
+        self._render_status()
+
     def _start_gpu_monitor(self) -> None:
         """Avvia il polling GPU in un thread separato (no freeze UI)."""
         self._gpu_poller = _GpuPoller(interval_sec=2.0, parent=self)
@@ -261,6 +333,9 @@ class MainWindow(QMainWindow):
         else:
             parts.append("Nessun progetto attivo")
 
+        if self._comfy_state:
+            parts.append(f"Comfy: {self._comfy_state}")
+
         parts.append(snap.status_line())
         self.status_bar.showMessage(" │ ".join(parts))
 
@@ -274,11 +349,20 @@ class MainWindow(QMainWindow):
         self.status_bar.setStyleSheet(f"QStatusBar {{ color: {color}; }}")
 
     def closeEvent(self, event) -> None:
-        """Ferma il thread di polling GPU prima di chiudere (no thread orfani)."""
+        """Ferma thread e processi figli prima di chiudere (no orfani)."""
         poller = getattr(self, "_gpu_poller", None)
         if poller is not None:
             poller.stop()
             poller.wait(2000)
+
+        starter = getattr(self, "_comfy_starter", None)
+        if starter is not None and starter.isRunning():
+            starter.wait(5000)
+
+        server = getattr(self, "_comfy_server", None)
+        if server is not None:
+            server.stop()
+
         super().closeEvent(event)
 
     def _maybe_show_first_run_dialog(self) -> None:

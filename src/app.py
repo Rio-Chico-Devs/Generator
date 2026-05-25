@@ -8,6 +8,7 @@ import sys
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
+from src.core.app_config import AppConfig
 from src.utils.paths import get_app_data_dir, get_assets_dir
 
 logger = logging.getLogger(__name__)
@@ -74,10 +75,20 @@ def run_app(argv: list[str]) -> int:
 
     _apply_stylesheet(app)
 
+    cfg = AppConfig.load()
+    logger.info(
+        "AppConfig: vram_mode=%s port=%d thermal=%s",
+        cfg.comfy_vram_mode, cfg.comfy_port, cfg.thermal_safety_enabled,
+    )
+
     # Import qui per non pagare il costo se solo --help
     from src.ui.main_window import MainWindow
 
-    window = MainWindow(mock=args.mock, skip_model_check=args.skip_model_check)
+    window = MainWindow(
+        mock=args.mock,
+        skip_model_check=args.skip_model_check,
+        app_config=cfg,
+    )
     window.show()
 
     return app.exec()

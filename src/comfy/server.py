@@ -33,8 +33,13 @@ def find_free_port(start: int = 8188, attempts: int = 20) -> int:
 class ComfyServer:
     """Controlla il ciclo di vita del processo ComfyUI."""
 
-    def __init__(self, vram_mode: str = "normalvram") -> None:
+    def __init__(
+        self,
+        vram_mode: str = "normalvram",
+        preferred_port: Optional[int] = None,
+    ) -> None:
         self.vram_mode = vram_mode
+        self.preferred_port = preferred_port
         self.port: Optional[int] = None
         self._proc: Optional[subprocess.Popen] = None
         self._log_file = None
@@ -57,7 +62,7 @@ class ComfyServer:
         # Cleanup eventuali processi orfani precedenti
         self._kill_orphans()
 
-        self.port = find_free_port()
+        self.port = find_free_port(start=self.preferred_port or 8188)
         log_dir = get_app_data_dir() / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         self._log_file = open(log_dir / "comfyui.log", "w", encoding="utf-8")
