@@ -29,7 +29,7 @@ class GenerationConfig:
     # Sampler
     steps: int = 30
     cfg_scale: float = 7.0
-    sampler: str = "dpmpp_2m_karras"  # ID interno mappato a scheduler diffusers
+    sampler: str = "dpmpp_2m_karras"  # nome sampler ComfyUI
     seed: int = -1  # -1 = random
 
     # Batch

@@ -66,5 +66,11 @@ def get_archived_dir() -> Path:
 
 def ensure_user_dirs() -> None:
     """Crea le cartelle utente se non esistono."""
-    for d in (get_app_data_dir(), get_user_data_dir(), get_models_dir(), get_projects_dir()):
+    for d in (
+        get_app_data_dir(),
+        get_user_data_dir(),
+        get_user_data_dir() / "engine",
+        get_models_dir(),
+        get_projects_dir(),
+    ):
         d.mkdir(parents=True, exist_ok=True)

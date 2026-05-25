@@ -130,7 +130,7 @@ class ComfyServer:
         for proc in psutil.process_iter(["pid", "cmdline"]):
             try:
                 cmdline = proc.info.get("cmdline") or []
-                if any("ComfyUI" in str(c) and "main.py" in " ".join(cmdline) for c in cmdline):
+                if "main.py" in " ".join(cmdline) and any("ComfyUI" in str(c) for c in cmdline):
                     logger.warning("Trovato ComfyUI orfano pid=%s, termino", proc.info["pid"])
                     proc.terminate()
             except (psutil.NoSuchProcess, psutil.AccessDenied):
