@@ -78,6 +78,8 @@ def base_wf():
 
 class TestParametrize:
     def test_prompt_includes_trigger_prefix(self, base_wf, project_with_lora):
+        # base_model pony-v6-xl → dialetto "pony": i quality-tag (score_*)
+        # vanno in testa, poi il trigger del progetto, poi il prompt utente.
         project_with_lora.trigger_prompt_prefix = "vf_char_v1, masterpiece,"
         _parametrize(
             base_wf,
@@ -87,7 +89,8 @@ class TestParametrize:
         )
         pos = base_wf.mapping["positive_prompt"]
         result = base_wf.get_param(pos["node"], pos["field"])
-        assert result.startswith("vf_char_v1, masterpiece,")
+        assert result.startswith("score_9")
+        assert "vf_char_v1" in result
         assert "running in a forest" in result
 
     def test_prompt_without_prefix(self, base_wf, project_with_lora):
@@ -99,7 +102,9 @@ class TestParametrize:
             project_with_lora,
         )
         pos = base_wf.mapping["positive_prompt"]
-        assert base_wf.get_param(pos["node"], pos["field"]) == "standing alone"
+        result = base_wf.get_param(pos["node"], pos["field"])
+        assert "standing alone" in result
+        assert result.startswith("score_9")  # quality-tag del dialetto pony
 
     def test_negative_prompt_explicit(self, base_wf, project_with_lora):
         _parametrize(
@@ -109,7 +114,10 @@ class TestParametrize:
             project_with_lora,
         )
         neg = base_wf.mapping["negative_prompt"]
-        assert base_wf.get_param(neg["node"], neg["field"]) == "ugly, blurry"
+        result = base_wf.get_param(neg["node"], neg["field"])
+        # Il negative dell'utente è rispettato e i quality-negative accodati.
+        assert result.startswith("ugly, blurry")
+        assert "worst quality" in result
 
     def test_negative_falls_back_to_project_default(self, base_wf, project_with_lora):
         project_with_lora.default_negative_prompt = "project_default_neg"
@@ -120,7 +128,33 @@ class TestParametrize:
             project_with_lora,
         )
         neg = base_wf.mapping["negative_prompt"]
-        assert base_wf.get_param(neg["node"], neg["field"]) == "project_default_neg"
+        result = base_wf.get_param(neg["node"], neg["field"])
+        assert result.startswith("project_default_neg")
+
+    def test_clip_skip_applied_for_pony(self, base_wf, project_with_lora):
+        # Pony vuole CLIP skip 2 → ComfyUI CLIPSetLastLayer = -2.
+        _parametrize(
+            base_wf,
+            RECIPES[RecipeId.BASE],
+            {"prompt": "x"},
+            project_with_lora,
+        )
+        cs = base_wf.mapping["clip_skip"]
+        assert base_wf.get_param(cs["node"], cs["field"]) == -2
+
+    def test_record_captures_effective_params(self, base_wf, project_with_lora):
+        rec = _parametrize(
+            base_wf,
+            RECIPES[RecipeId.BASE],
+            {"prompt": "x", "seed": 123},
+            project_with_lora,
+        )
+        assert rec.model_id == "pony-v6-xl"
+        assert rec.dialect == "pony"
+        assert rec.seed == 123
+        assert rec.clip_skip == 2
+        assert rec.lora_name == "character_v1.safetensors"
+        assert rec.positive.startswith("score_9")
 
     def test_seed_minus1_resolved_to_non_negative(self, base_wf, project_with_lora):
         _parametrize(
@@ -422,3 +456,54 @@ class TestRecipeWorker:
             worker.start()
 
         assert not errors, f"Errori inattesi con progetto senza LoRA: {errors}"
+
+    def test_worker_batch_produces_multiple_images(
+        self, qtbot, tmp_path, project_with_lora
+    ):
+        from src.utils.gpu_monitor import GpuSnapshot, SafetyConfig
+
+        worker = RecipeWorker(
+            recipe=RECIPES[RecipeId.BASE],
+            user_params={"prompt": "x", "variants": 3, "seed": 10},
+            project=project_with_lora,
+            client=MockComfyClient(),
+            output_dir=tmp_path / "out",
+            safety=SafetyConfig(cooldown_between_images_sec=0.01),
+            gpu_read_fn=lambda: GpuSnapshot(available=False),
+        )
+
+        with qtbot.waitSignal(worker.finished_ok, timeout=20_000) as blocker:
+            worker.start()
+
+        paths = blocker.args[0]
+        assert len(paths) == 3
+        assert all(p.exists() for p in paths)
+
+    def test_worker_writes_sidecar_with_resolved_seed(
+        self, qtbot, tmp_path, project_with_lora
+    ):
+        import json as _json
+
+        from src.utils.gpu_monitor import GpuSnapshot, SafetyConfig
+
+        worker = RecipeWorker(
+            recipe=RECIPES[RecipeId.BASE],
+            user_params={"prompt": "x", "seed": 777},
+            project=project_with_lora,
+            client=MockComfyClient(),
+            output_dir=tmp_path / "out",
+            safety=SafetyConfig(enabled=False),
+            gpu_read_fn=lambda: GpuSnapshot(available=False),
+        )
+
+        with qtbot.waitSignal(worker.finished_ok, timeout=15_000) as blocker:
+            worker.start()
+
+        img = blocker.args[0][0]
+        sidecar = img.with_suffix(".json")
+        assert sidecar.exists(), "sidecar JSON non scritto"
+        meta = _json.loads(sidecar.read_text(encoding="utf-8"))
+        assert meta["seed"] == 777
+        assert meta["dialect"] == "pony"
+        assert meta["model_id"] == "pony-v6-xl"
+        assert meta["created_at"]

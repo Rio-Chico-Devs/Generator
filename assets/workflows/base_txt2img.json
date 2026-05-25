@@ -15,18 +15,25 @@
       "clip": ["4", 1]
     }
   },
+  "11": {
+    "class_type": "CLIPSetLastLayer",
+    "inputs": {
+      "stop_at_clip_layer": -2,
+      "clip": ["10", 1]
+    }
+  },
   "6": {
     "class_type": "CLIPTextEncode",
     "inputs": {
       "text": "",
-      "clip": ["10", 1]
+      "clip": ["11", 0]
     }
   },
   "7": {
     "class_type": "CLIPTextEncode",
     "inputs": {
       "text": "low quality, worst quality, blurry",
-      "clip": ["10", 1]
+      "clip": ["11", 0]
     }
   },
   "5": {

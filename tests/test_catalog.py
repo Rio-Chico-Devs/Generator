@@ -5,8 +5,10 @@ from src.core.catalog import (
     CATALOG,
     VAE_CATALOG,
     aux_models_for_phase,
+    dialect_for_model,
     suggest_models_for,
 )
+from src.core.prompting import PRESETS
 from src.core.recipes import RECIPES, RecipeId
 
 
@@ -81,6 +83,24 @@ def test_recipe_required_models_in_aux_or_base_catalog():
                 f"Ricetta '{recipe.id}': modello '{mid}' non trovato "
                 f"in CATALOG né in AUX_CATALOG"
             )
+
+
+def test_every_model_has_valid_prompt_dialect():
+    for entry in CATALOG.values():
+        assert entry.prompt_dialect in PRESETS, (
+            f"{entry.id}: dialetto '{entry.prompt_dialect}' senza preset"
+        )
+
+
+def test_illustrious_in_catalog_with_illustrious_dialect():
+    assert "illustrious-xl" in CATALOG
+    assert CATALOG["illustrious-xl"].prompt_dialect == "illustrious"
+
+
+def test_dialect_for_model_resolves_and_defaults():
+    assert dialect_for_model("pony-v6-xl") == "pony"
+    assert dialect_for_model("illustrious-xl") == "illustrious"
+    assert dialect_for_model("unknown-id") == "plain"
 
 
 def test_aux_models_for_phase_filters_correctly():

@@ -13,6 +13,10 @@ from typing import Literal, Optional
 
 ModelFamily = Literal["sdxl", "sd15", "flux"]
 UseCase = Literal["character", "photo", "illustration", "abstract", "logo"]
+# Dialetto di prompting: determina quality-tag e CLIP skip (vedi core/prompting.py).
+# Indipendente dalla famiglia architetturale: Pony e Illustrious sono entrambi
+# SDXL ma vogliono prompt diversi.
+PromptDialect = Literal["pony", "illustrious", "anime", "photo", "plain"]
 
 
 @dataclass(frozen=True)
@@ -31,6 +35,7 @@ class ModelEntry:
     min_vram_gb_training: float = 7.0
     commercial_use_ok: bool = True
     description: str = ""
+    prompt_dialect: PromptDialect = "plain"
 
 
 CATALOG: dict[str, ModelEntry] = {
@@ -53,6 +58,28 @@ CATALOG: dict[str, ModelEntry] = {
             "ottimizzato per tag Danbooru. Ottimo per personaggi originali, "
             "concept art, sprite stilizzati."
         ),
+        prompt_dialect="pony",
+    ),
+    "illustrious-xl": ModelEntry(
+        id="illustrious-xl",
+        name="Illustrious XL",
+        family="sdxl",
+        repo_id="OnomaAIResearch/Illustrious-xl-early-release-v0",
+        revision=None,
+        size_gb=6.9,
+        license="Fair AI Public 1.0-SD",
+        license_url="https://freedevproject.org/faipl-1.0-sd/",
+        suitable_for=("character", "illustration"),
+        requires_vae="sdxl-vae-fp16-fix",
+        min_vram_gb_inference=5.5,
+        min_vram_gb_training=7.5,
+        commercial_use_ok=True,
+        description=(
+            "Modello SDXL anime/illustrazione ad alta fedeltà di tag, base di "
+            "moltissimi fine-tune della community. Vuole i quality-tag booru "
+            "(masterpiece, best quality, very aesthetic...) e CLIP skip 2."
+        ),
+        prompt_dialect="illustrious",
     ),
     "juggernaut-xl-v9": ModelEntry(
         id="juggernaut-xl-v9",
@@ -72,6 +99,7 @@ CATALOG: dict[str, ModelEntry] = {
             "Fine-tune SDXL ottimizzato per fotorealismo. "
             "Ottimo per render prodotti, mockup, asset realistici."
         ),
+        prompt_dialect="photo",
     ),
     "animagine-xl-4": ModelEntry(
         id="animagine-xl-4",
@@ -91,6 +119,7 @@ CATALOG: dict[str, ModelEntry] = {
             "Modello SDXL per illustrazione anime/manga alta qualità. "
             "Alternativa a Pony con output più 'pulito'."
         ),
+        prompt_dialect="anime",
     ),
     "realistic-vision-v6": ModelEntry(
         id="realistic-vision-v6",
@@ -109,6 +138,7 @@ CATALOG: dict[str, ModelEntry] = {
             "Modello SD 1.5 leggero per fotorealismo veloce. "
             "Training in 30-45 min, ideale per esperimenti."
         ),
+        prompt_dialect="photo",
     ),
     "sd-1-5": ModelEntry(
         id="sd-1-5",
@@ -323,6 +353,12 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
 def aux_models_for_phase(phase: int) -> list[AuxModelEntry]:
     """Modelli ausiliari necessari fino alla fase indicata."""
     return [m for m in AUX_CATALOG.values() if m.required_for_phase <= phase]
+
+
+def dialect_for_model(model_id: str) -> str:
+    """Dialetto di prompting per un id modello; ``plain`` se sconosciuto."""
+    entry = CATALOG.get(model_id)
+    return entry.prompt_dialect if entry else "plain"
 
 
 # ---------------------------------------------------------------------------
