@@ -22,6 +22,8 @@ from PyQt6.QtCore import QSize, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices, QIcon, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QComboBox,
+    QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -35,13 +37,41 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.core.gallery import GalleryItem, load_gallery, remove_item
+from src.core.gallery import (
+    RATING_KEEP,
+    RATING_REJECT,
+    RATING_UNTAGGED,
+    RATING_VARIANT,
+    GalleryItem,
+    load_gallery,
+    remove_item,
+    set_rating,
+)
 from src.core.project import Project
 
 logger = logging.getLogger(__name__)
 
 _THUMB_W = 168
 _GALLERY_COLS = 3
+
+# Colore del bordo del thumbnail per ciascun giudizio (oltre all'emoji nel testo).
+_RATING_BORDER = {
+    RATING_KEEP: "#3fae5a",
+    RATING_VARIANT: "#d8a23a",
+    RATING_REJECT: "#c0504d",
+}
+_RATING_EMOJI = {
+    RATING_KEEP: "👍",
+    RATING_VARIANT: "🔀",
+    RATING_REJECT: "👎",
+}
+
+
+def _hline() -> QFrame:
+    line = QFrame()
+    line.setFrameShape(QFrame.Shape.HLine)
+    line.setStyleSheet("color: #2d3344;")
+    return line
 
 
 class _Thumb(QToolButton):
@@ -56,7 +86,6 @@ class _Thumb(QToolButton):
         self.setIconSize(QSize(_THUMB_W, _THUMB_W))
         self.setFixedSize(_THUMB_W + 16, _THUMB_W + 34)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.setToolTip(item.caption())
 
         pix = QPixmap(str(item.path))
         if not pix.isNull():
@@ -69,8 +98,21 @@ class _Thumb(QToolButton):
                     )
                 )
             )
-        name = item.name if len(item.name) <= 20 else item.name[:18] + "…"
-        self.setText(name)
+        self._base_name = item.name if len(item.name) <= 20 else item.name[:18] + "…"
+        self.apply_rating_style()
+
+    def apply_rating_style(self) -> None:
+        """Riflette il giudizio corrente di ``self.item`` su bordo, testo e tooltip."""
+        rating = self.item.rating
+        emoji = _RATING_EMOJI.get(rating, "")
+        self.setText(f"{emoji} {self._base_name}" if emoji else self._base_name)
+        self.setToolTip(self.item.caption())
+        color = _RATING_BORDER.get(rating)
+        border = f"border: 2px solid {color}; border-radius: 6px;" if color else ""
+        self.setStyleSheet(
+            f"QToolButton {{ {border} }}"
+            "QToolButton:checked { background: #2d3344; border-radius: 6px; }"
+        )
 
 
 class GalleryView(QWidget):
@@ -85,6 +127,7 @@ class GalleryView(QWidget):
         self._project: Optional[Project] = None
         self._items: list[GalleryItem] = []
         self._selected: Optional[GalleryItem] = None
+        self._rating_filter: Optional[str] = None
         self._build_ui()
 
     # --- costruzione UI -------------------------------------------------
@@ -99,6 +142,15 @@ class GalleryView(QWidget):
         self.search.setClearButtonEnabled(True)
         self.search.textChanged.connect(self.refresh)
         bar.addWidget(self.search, 1)
+        self.filter_combo = QComboBox()
+        self.filter_combo.setToolTip("Filtra per giudizio")
+        self.filter_combo.addItem("Tutte", None)
+        self.filter_combo.addItem("👍 Coerenti", RATING_KEEP)
+        self.filter_combo.addItem("🔀 Varianti", RATING_VARIANT)
+        self.filter_combo.addItem("👎 Scartate", RATING_REJECT)
+        self.filter_combo.addItem("Da valutare", RATING_UNTAGGED)
+        self.filter_combo.currentIndexChanged.connect(self.refresh)
+        bar.addWidget(self.filter_combo)
         refresh_btn = QPushButton("Aggiorna")
         refresh_btn.clicked.connect(self.refresh)
         bar.addWidget(refresh_btn)
@@ -133,6 +185,36 @@ class GalleryView(QWidget):
         self.detail.setReadOnly(True)
         self.detail.setStyleSheet("font-family: monospace; font-size: 11px;")
         v.addWidget(self.detail, 1)
+
+        v.addWidget(_hline())
+        v.addWidget(QLabel("Giudizio"))
+        rate_help = QLabel(
+            "Insegna allo stile: rinforza ciò che è coerente,\n"
+            "segna le varianti, scarta gli errori."
+        )
+        rate_help.setWordWrap(True)
+        rate_help.setStyleSheet("color: #8a8d96; font-size: 10px;")
+        v.addWidget(rate_help)
+
+        self.rate_keep = QPushButton("👍 Coerente")
+        self.rate_keep.setToolTip("È il personaggio: usala per rinforzare lo stile")
+        self.rate_keep.setCheckable(True)
+        self.rate_keep.clicked.connect(lambda: self._on_rate(RATING_KEEP))
+        self.rate_variant = QPushButton("🔀 Variante")
+        self.rate_variant.setToolTip("Piace ma è una variante: candidata a un LoRA derivato")
+        self.rate_variant.setCheckable(True)
+        self.rate_variant.clicked.connect(lambda: self._on_rate(RATING_VARIANT))
+        self.rate_reject = QPushButton("👎 Scarta")
+        self.rate_reject.setToolTip("Da dimenticare: riferimento negativo")
+        self.rate_reject.setCheckable(True)
+        self.rate_reject.clicked.connect(lambda: self._on_rate(RATING_REJECT))
+        rate_row = QHBoxLayout()
+        rate_row.addWidget(self.rate_keep)
+        rate_row.addWidget(self.rate_variant)
+        rate_row.addWidget(self.rate_reject)
+        v.addLayout(rate_row)
+
+        v.addWidget(_hline())
 
         self.reuse_btn = QPushButton("Usa questi parametri")
         self.reuse_btn.setToolTip(
@@ -171,12 +253,14 @@ class GalleryView(QWidget):
             self._empty_label.setVisible(True)
             return
 
-        self._items = load_gallery(self._project.gallery_dir, self.search.text())
+        self._rating_filter = self.filter_combo.currentData()
+        self._items = load_gallery(
+            self._project.gallery_dir, self.search.text(), self._rating_filter
+        )
         if not self._items:
+            filtering = bool(self.search.text().strip()) or self._rating_filter is not None
             self._empty_label.setText(
-                "Nessun risultato."
-                if self.search.text().strip()
-                else "Nessuna immagine in galleria."
+                "Nessun risultato." if filtering else "Nessuna immagine in galleria."
             )
             self._empty_label.setVisible(True)
             return
@@ -209,11 +293,46 @@ class GalleryView(QWidget):
         self.detail.setPlainText(item.caption())
         self._set_actions_enabled(True)
         self.reuse_btn.setEnabled(item.has_metadata)
+        self._sync_rating_buttons()
 
     def _set_actions_enabled(self, enabled: bool) -> None:
         self.reuse_btn.setEnabled(enabled)
         self.open_btn.setEnabled(enabled)
         self.delete_btn.setEnabled(enabled)
+        self.rate_keep.setEnabled(enabled)
+        self.rate_variant.setEnabled(enabled)
+        self.rate_reject.setEnabled(enabled)
+        if not enabled:
+            self._sync_rating_buttons()
+
+    def _sync_rating_buttons(self) -> None:
+        """Allinea lo stato premuto dei tre pulsanti al giudizio dell'immagine."""
+        r = self._selected.rating if self._selected else None
+        self.rate_keep.setChecked(r == RATING_KEEP)
+        self.rate_variant.setChecked(r == RATING_VARIANT)
+        self.rate_reject.setChecked(r == RATING_REJECT)
+
+    def _on_rate(self, value: str) -> None:
+        """Applica/azzera il giudizio: ri-cliccare quello attivo lo rimuove."""
+        if self._selected is None:
+            return
+        new = None if self._selected.rating == value else value
+        set_rating(self._selected.path, new)
+        if new is None:
+            self._selected.metadata.pop("rating", None)
+        else:
+            self._selected.metadata["rating"] = new
+
+        if self._rating_filter is None:
+            # Vista "Tutte": ristila in posto e mantieni la selezione.
+            btn = self._group.checkedButton()
+            if isinstance(btn, _Thumb):
+                btn.apply_rating_style()
+            self.detail.setPlainText(self._selected.caption())
+            self._sync_rating_buttons()
+        else:
+            # Con un filtro attivo l'item può uscire dalla vista: ricarica.
+            self.refresh()
 
     def _on_reuse(self) -> None:
         if self._selected is None:

@@ -30,6 +30,22 @@ REUSABLE_KEYS = (
     "seed",
 )
 
+# Giudizio dell'utente su un'immagine generata: è il primo anello del loop di
+# apprendimento (galleria → dataset / variante / negativo). Salvato nel sidecar.
+RATING_KEEP = "keep"  # coerente col personaggio → rinforza il dataset
+RATING_VARIANT = "variant"  # piace, ma è una variante → candidata a fork LoRA
+RATING_REJECT = "reject"  # da dimenticare → riferimento negativo
+RATINGS = frozenset({RATING_KEEP, RATING_VARIANT, RATING_REJECT})
+
+# Sentinella di solo-filtro (non viene mai scritta nel sidecar).
+RATING_UNTAGGED = "untagged"
+
+RATING_LABELS = {
+    RATING_KEEP: "👍 Coerente (rinforza)",
+    RATING_VARIANT: "🔀 Variante",
+    RATING_REJECT: "👎 Da scartare",
+}
+
 
 def sidecar_path(image: Path) -> Path:
     """Path del sidecar JSON dei parametri accanto all'immagine."""
@@ -69,6 +85,12 @@ class GalleryItem:
         return str(self.metadata.get("created_at", ""))
 
     @property
+    def rating(self) -> Optional[str]:
+        """Giudizio dell'utente (keep/variant/reject), None se non valutata."""
+        r = self.metadata.get("rating")
+        return r if r in RATINGS else None
+
+    @property
     def has_metadata(self) -> bool:
         return bool(self.metadata)
 
@@ -86,6 +108,8 @@ class GalleryItem:
         if not m:
             return f"{self.name}\n\n(nessun metadato)"
         lines = [self.name, ""]
+        if self.rating:
+            lines.append(f"Giudizio: {RATING_LABELS[self.rating]}")
         if self.prompt:
             lines.append(f"Prompt: {self.prompt}")
         if self.negative:
@@ -125,11 +149,16 @@ def load_sidecar(image: Path) -> dict:
         return {}
 
 
-def load_gallery(directory: Path, query: str = "") -> list[GalleryItem]:
+def load_gallery(
+    directory: Path,
+    query: str = "",
+    rating_filter: Optional[str] = None,
+) -> list[GalleryItem]:
     """Scandisce ``directory`` e ritorna gli item ordinati dal più recente.
 
-    Filtra per ``query`` (prompt/nome) se fornita. Le immagini senza sidecar
-    sono comunque incluse (con metadati vuoti)."""
+    Filtra per ``query`` (prompt/nome) se fornita e per ``rating_filter``:
+    uno di ``RATINGS``, ``RATING_UNTAGGED`` (solo non valutate) o ``None``
+    (tutte). Le immagini senza sidecar sono incluse (con metadati vuoti)."""
     directory = Path(directory)
     if not directory.is_dir():
         return []
@@ -145,9 +174,38 @@ def load_gallery(directory: Path, query: str = "") -> list[GalleryItem]:
             GalleryItem(path=entry, metadata=load_sidecar(entry), mtime=mtime)
         )
     items.sort(key=lambda it: it.mtime, reverse=True)
+    if rating_filter == RATING_UNTAGGED:
+        items = [it for it in items if it.rating is None]
+    elif rating_filter in RATINGS:
+        items = [it for it in items if it.rating == rating_filter]
     if query.strip():
         items = [it for it in items if it.matches(query)]
     return items
+
+
+def set_rating(image: Path, rating: Optional[str]) -> dict:
+    """Imposta (o azzera con ``None``) il giudizio dell'immagine nel sidecar.
+
+    Conserva gli altri parametri già presenti. Crea il sidecar se assente, ma
+    evita di crearne uno vuoto solo per azzerare un giudizio mai dato. Ritorna
+    il dict aggiornato."""
+    if rating is not None and rating not in RATINGS:
+        raise ValueError(f"Rating non valido: {rating!r}")
+    data = load_sidecar(image)
+    if rating is None:
+        data.pop("rating", None)
+    else:
+        data["rating"] = rating
+    sc = sidecar_path(image)
+    if not data and not sc.exists():
+        return data
+    try:
+        sc.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+    except OSError as exc:
+        logger.warning("Giudizio non salvato per %s: %s", image.name, exc)
+    return data
 
 
 def remove_item(item: GalleryItem) -> None:

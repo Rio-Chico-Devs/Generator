@@ -6,12 +6,19 @@ import os
 import time
 from pathlib import Path
 
+import pytest
+
 from src.core.gallery import (
+    RATING_KEEP,
+    RATING_REJECT,
+    RATING_UNTAGGED,
+    RATING_VARIANT,
     REUSABLE_KEYS,
     GalleryItem,
     load_gallery,
     load_sidecar,
     remove_item,
+    set_rating,
     sidecar_path,
 )
 
@@ -151,3 +158,84 @@ def test_remove_item_deletes_image_and_sidecar(tmp_path):
     remove_item(it)
     assert not img.exists()
     assert not sidecar_path(img).exists()
+
+
+# ---------------------------------------------------------------------------
+# Giudizio (rating): set_rating, property e filtro
+# ---------------------------------------------------------------------------
+
+
+def test_rating_property_reads_valid_value():
+    it = GalleryItem(path=Path("x.png"), metadata={"rating": RATING_KEEP})
+    assert it.rating == RATING_KEEP
+
+
+def test_rating_property_ignores_unknown_value():
+    it = GalleryItem(path=Path("x.png"), metadata={"rating": "bogus"})
+    assert it.rating is None
+
+
+def test_rating_property_none_when_absent():
+    assert GalleryItem(path=Path("x.png")).rating is None
+
+
+def test_set_rating_persists_to_sidecar(tmp_path):
+    img = _write_image(tmp_path, "x.png", meta={"positive": "p"})
+    set_rating(img, RATING_VARIANT)
+    assert load_sidecar(img)["rating"] == RATING_VARIANT
+    # gli altri parametri restano intatti
+    assert load_sidecar(img)["positive"] == "p"
+
+
+def test_set_rating_none_clears(tmp_path):
+    img = _write_image(tmp_path, "x.png", meta={"positive": "p", "rating": RATING_REJECT})
+    set_rating(img, None)
+    assert "rating" not in load_sidecar(img)
+    assert load_sidecar(img)["positive"] == "p"
+
+
+def test_set_rating_invalid_raises(tmp_path):
+    img = _write_image(tmp_path, "x.png")
+    with pytest.raises(ValueError):
+        set_rating(img, "nope")
+
+
+def test_set_rating_creates_sidecar_when_absent(tmp_path):
+    img = _write_image(tmp_path, "x.png")  # nessun sidecar
+    assert not sidecar_path(img).exists()
+    set_rating(img, RATING_KEEP)
+    assert load_sidecar(img)["rating"] == RATING_KEEP
+
+
+def test_set_rating_none_does_not_create_empty_sidecar(tmp_path):
+    img = _write_image(tmp_path, "x.png")  # nessun sidecar
+    set_rating(img, None)
+    assert not sidecar_path(img).exists()
+
+
+def test_load_gallery_filters_by_rating(tmp_path):
+    _write_image(tmp_path, "k.png", meta={"rating": RATING_KEEP})
+    _write_image(tmp_path, "v.png", meta={"rating": RATING_VARIANT})
+    _write_image(tmp_path, "r.png", meta={"rating": RATING_REJECT})
+    _write_image(tmp_path, "u.png", meta={"positive": "x"})  # non valutata
+    assert [it.name for it in load_gallery(tmp_path, rating_filter=RATING_KEEP)] == ["k.png"]
+    assert [it.name for it in load_gallery(tmp_path, rating_filter=RATING_VARIANT)] == ["v.png"]
+
+
+def test_load_gallery_untagged_filter(tmp_path):
+    _write_image(tmp_path, "k.png", meta={"rating": RATING_KEEP})
+    _write_image(tmp_path, "u.png", meta={"positive": "x"})
+    _write_image(tmp_path, "bare.png")  # senza sidecar → non valutata
+    names = {it.name for it in load_gallery(tmp_path, rating_filter=RATING_UNTAGGED)}
+    assert names == {"u.png", "bare.png"}
+
+
+def test_load_gallery_no_filter_returns_all(tmp_path):
+    _write_image(tmp_path, "k.png", meta={"rating": RATING_KEEP})
+    _write_image(tmp_path, "u.png", meta={"positive": "x"})
+    assert len(load_gallery(tmp_path)) == 2
+
+
+def test_caption_includes_rating_label():
+    it = GalleryItem(path=Path("x.png"), metadata={"positive": "p", "rating": RATING_KEEP})
+    assert "Coerente" in it.caption()
