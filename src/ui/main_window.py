@@ -142,6 +142,13 @@ class MainWindow(QMainWindow):
 
         ensure_user_dirs()
 
+        # Wallet crediti condiviso: bonus di benvenuto al primo avvio.
+        from src.core.credits import CreditWallet
+        self._wallet = CreditWallet.load()
+        if not self._wallet.ledger:
+            self._wallet.grant(1000.0, reason="bonus di benvenuto")
+            self._wallet.save()
+
         self.setWindowTitle("Vihente Forge")
         self.resize(1280, 800)
 
@@ -171,6 +178,11 @@ class MainWindow(QMainWindow):
             a.triggered.connect(lambda checked, n=view_name: self._switch_view(n))
             toolbar.addAction(a)
 
+        toolbar.addSeparator()
+        action_credits = QAction("Crediti", self)
+        action_credits.triggered.connect(self._on_open_credits)
+        toolbar.addAction(action_credits)
+
         # Sidebar progetti
         sidebar = QWidget()
         sidebar_layout = QVBoxLayout(sidebar)
@@ -189,7 +201,20 @@ class MainWindow(QMainWindow):
         self.workspace = QStackedWidget()
         self._views: dict[str, QWidget] = {}
         for name in ("Dataset", "Train", "Generate", "Gallery"):
-            v = _PlaceholderView(name)
+            if name == "Generate":
+                from src.ui.generate_view import GenerateView
+                v = GenerateView()
+                v.set_wallet(self._wallet)
+                if self.mock:
+                    # Mock: niente freno termico, demo veloce
+                    from src.utils.gpu_monitor import SafetyConfig
+                    v.set_safety(SafetyConfig(enabled=False), None)
+                else:
+                    v.set_safety(self._app_config.thermal_safety(), None)
+                v.balance_changed.connect(self._on_wallet_changed)
+                self._generate_view = v
+            else:
+                v = _PlaceholderView(name)
             self._views[name] = v
             self.workspace.addWidget(v)
 
@@ -235,8 +260,10 @@ class MainWindow(QMainWindow):
         try:
             self._current_project = Project.load(Path(path_str))
             self.setWindowTitle(f"Vihente Forge — {self._current_project.name}")
+            gv = getattr(self, "_generate_view", None)
+            if gv is not None:
+                gv.set_project(self._current_project)
             self._render_status()
-            # In futuro: notifica view per refresh
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Caricamento progetto fallito:\n{e}")
 
@@ -267,6 +294,22 @@ class MainWindow(QMainWindow):
             return
         self.workspace.setCurrentWidget(view)
 
+    # --- Crediti ------------------------------------------------------
+
+    def _on_open_credits(self) -> None:
+        from src.ui.credit_dialog import CreditDialog
+
+        dlg = CreditDialog(self._wallet, parent=self)
+        dlg.wallet_changed.connect(self._on_wallet_changed)
+        dlg.exec()
+
+    def _on_wallet_changed(self) -> None:
+        """Persiste il wallet e aggiorna l'etichetta saldo della GenerateView."""
+        self._wallet.save()
+        gv = getattr(self, "_generate_view", None)
+        if gv is not None:
+            gv.refresh_balance()
+
     # --- Status / first run ------------------------------------------
 
     def _start_comfy(self) -> None:
@@ -275,6 +318,9 @@ class MainWindow(QMainWindow):
             from src.comfy.client import MockComfyClient
             self._comfy_client = MockComfyClient()
             self._comfy_state = "mock"
+            gv = getattr(self, "_generate_view", None)
+            if gv is not None:
+                gv.set_comfy_client(self._comfy_client)
             self._render_status()
             return
 
@@ -301,6 +347,9 @@ class MainWindow(QMainWindow):
         self._comfy_client = ComfyClient(port=port)
         self._comfy_state = f"pronto:{port}"
         logger.info("ComfyUI pronto su porta %d", port)
+        gv = getattr(self, "_generate_view", None)
+        if gv is not None:
+            gv.set_comfy_client(self._comfy_client)
         self._render_status()
 
     def _on_comfy_failed(self, msg: str) -> None:
@@ -350,6 +399,13 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Ferma thread e processi figli prima di chiudere (no orfani)."""
+        wallet = getattr(self, "_wallet", None)
+        if wallet is not None:
+            try:
+                wallet.save()
+            except Exception as exc:
+                logger.warning("Salvataggio wallet fallito: %s", exc)
+
         poller = getattr(self, "_gpu_poller", None)
         if poller is not None:
             poller.stop()
