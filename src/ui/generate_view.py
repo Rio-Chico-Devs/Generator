@@ -63,6 +63,20 @@ _THUMB_W = 188
 _GALLERY_COLS = 2
 
 
+def _as_int(value) -> Optional[int]:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _as_float(value) -> Optional[float]:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
 class _LoraSlot(QWidget):
     """Una riga LoRA: abilita, nome file, peso. Scansiona il file alla scelta."""
 
@@ -147,6 +161,12 @@ class _LoraSlot(QWidget):
 
     def weight_value(self) -> float:
         return self.weight.value() / 100.0
+
+    def spec(self) -> Optional[tuple[str, float]]:
+        """(path, peso) se lo slot è attivo, altrimenti None."""
+        if self.is_active() and self._path is not None:
+            return (str(self._path), self.weight_value())
+        return None
 
 
 class _ResultGallery(QWidget):
@@ -483,13 +503,11 @@ class GenerateView(QWidget):
     # --- raccolta stato / costo ----------------------------------------
 
     def _collect_form(self) -> GenerationForm:
-        active_loras = sum(1 for s in self.lora_slots if s.is_active())
+        extra_loras = tuple(
+            spec for s in self.lora_slots if (spec := s.spec()) is not None
+        )
         # peso stile: primo LoRA attivo, altrimenti default progetto
-        lora_weight = 0.85
-        for s in self.lora_slots:
-            if s.is_active():
-                lora_weight = s.weight_value()
-                break
+        lora_weight = extra_loras[0][1] if extra_loras else 0.85
         factor = (
             self.upscale_factor_combo.currentData()
             if self.upscale_check.isChecked()
@@ -508,7 +526,8 @@ class GenerateView(QWidget):
             lora_weight=lora_weight,
             batch=self.batch_spin.value(),
             upscale_factor=float(factor),
-            extra_lora_count=active_loras,
+            extra_lora_count=len(extra_loras),
+            extra_loras=extra_loras,
         )
 
     def _on_prompt_changed(self) -> None:
@@ -554,6 +573,47 @@ class GenerateView(QWidget):
     def refresh_balance(self) -> None:
         """Pubblico: chiamato da MainWindow dopo una ricarica esterna."""
         self._update_balance_label()
+
+    def apply_metadata(self, meta: dict) -> None:
+        """Pre-compila il form dai metadati di un'immagine (riusa da galleria).
+
+        Accetta le chiavi del sidecar (positive, negative, width, height,
+        steps, cfg, sampler, seed). Valori assenti o non validi sono ignorati."""
+        if "positive" in meta:
+            self.prompt.setPlainText(str(meta["positive"]))
+        if "negative" in meta:
+            self.negative.setPlainText(str(meta["negative"]))
+        w, h = _as_int(meta.get("width")), _as_int(meta.get("height"))
+        if w is not None and h is not None:
+            self._apply_preset(w, h)
+            self._sync_preset_buttons(w, h)
+        if (steps := _as_int(meta.get("steps"))) is not None:
+            self.steps_spin.setValue(steps)
+        if (cfg := _as_float(meta.get("cfg"))) is not None:
+            self.cfg_spin.setValue(cfg)
+        if meta.get("sampler"):
+            idx = self.sampler_combo.findText(str(meta["sampler"]))
+            if idx >= 0:
+                self.sampler_combo.setCurrentIndex(idx)
+        if (seed := _as_int(meta.get("seed"))) is not None and seed >= 0:
+            self.seed_spin.setValue(min(seed, self.seed_spin.maximum()))
+        self._on_prompt_changed()
+        self._update_cost()
+
+    def _sync_preset_buttons(self, width: int, height: int) -> None:
+        """Evidenzia il bottone preset che combacia, o 'Custom'."""
+        from src.core.generation_form import preset_for
+
+        preset = preset_for(width, height)
+        target_id = len(SIZE_PRESETS)  # Custom
+        if preset is not None:
+            for idx, p in enumerate(SIZE_PRESETS):
+                if p.key == preset.key:
+                    target_id = idx
+                    break
+        btn = self.preset_group.button(target_id)
+        if btn is not None:
+            btn.setChecked(True)
 
     def _update_generate_enabled(self) -> None:
         running = self._worker is not None and self._worker.isRunning()

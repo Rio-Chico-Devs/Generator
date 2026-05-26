@@ -91,6 +91,23 @@ def test_to_user_params_includes_all_keys():
     assert "sampler" in p and "scheduler" in p
 
 
+def test_to_user_params_includes_extra_loras():
+    form = GenerationForm(
+        prompt="x",
+        extra_loras=(("/d/A.safetensors", 0.8), ("/d/B.safetensors", 0.6)),
+        extra_lora_count=2,
+    )
+    p = form.to_user_params()
+    assert p["loras"] == [
+        {"path": "/d/A.safetensors", "weight": 0.8},
+        {"path": "/d/B.safetensors", "weight": 0.6},
+    ]
+
+
+def test_to_user_params_loras_empty_by_default():
+    assert GenerationForm(prompt="x").to_user_params()["loras"] == []
+
+
 def test_to_generation_config_maps_fields():
     form = GenerationForm(prompt="p", width=1024, height=1024, steps=20,
                           cfg=5.0, batch=2, extra_lora_count=2)

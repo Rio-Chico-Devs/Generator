@@ -147,8 +147,11 @@ class GenerationForm:
     upscale_factor: float = 1.0
     use_controlnet: bool = False
     use_ipadapter: bool = False
-    # LoRA extra selezionati dall'utente (oltre a quello del progetto)
+    # LoRA extra selezionati dall'utente (oltre a quello del progetto).
+    # extra_lora_count guida la stima costo; extra_loras porta i path/peso reali
+    # passati al worker per lo stacking. La UI tiene i due allineati.
     extra_lora_count: int = 0
+    extra_loras: tuple[tuple[str, float], ...] = ()
 
     def to_user_params(self) -> dict:
         """Dict passato a RecipeWorker. Chiavi non mappate dal workflow vengono
@@ -166,6 +169,10 @@ class GenerationForm:
             "lora_weight": float(self.lora_weight),
             "batch": int(self.batch),
             "upscale_factor": float(self.upscale_factor),
+            "loras": [
+                {"path": path, "weight": float(weight)}
+                for path, weight in self.extra_loras
+            ],
         }
 
     def to_generation_config(self) -> GenerationConfig:

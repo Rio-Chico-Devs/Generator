@@ -213,6 +213,11 @@ class MainWindow(QMainWindow):
                     v.set_safety(self._app_config.thermal_safety(), None)
                 v.balance_changed.connect(self._on_wallet_changed)
                 self._generate_view = v
+            elif name == "Gallery":
+                from src.ui.gallery_view import GalleryView
+                v = GalleryView()
+                v.reuse_requested.connect(self._on_reuse_params)
+                self._gallery_view = v
             else:
                 v = _PlaceholderView(name)
             self._views[name] = v
@@ -263,6 +268,9 @@ class MainWindow(QMainWindow):
             gv = getattr(self, "_generate_view", None)
             if gv is not None:
                 gv.set_project(self._current_project)
+            gal = getattr(self, "_gallery_view", None)
+            if gal is not None:
+                gal.set_project(self._current_project)
             self._render_status()
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Caricamento progetto fallito:\n{e}")
@@ -292,7 +300,19 @@ class MainWindow(QMainWindow):
         view = self._views.get(name)
         if view is None:
             return
+        # Entrando in Galleria, ricarica per mostrare le immagini più recenti.
+        if name == "Gallery":
+            gal = getattr(self, "_gallery_view", None)
+            if gal is not None:
+                gal.refresh()
         self.workspace.setCurrentWidget(view)
+
+    def _on_reuse_params(self, params: dict) -> None:
+        """Riusa i parametri di un'immagine: pre-compila Genera e ci passa."""
+        gv = getattr(self, "_generate_view", None)
+        if gv is not None:
+            gv.apply_metadata(params)
+            self._switch_view("Generate")
 
     # --- Crediti ------------------------------------------------------
 

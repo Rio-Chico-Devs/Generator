@@ -308,13 +308,33 @@ def _parametrize(
     )
     _safe_set_dimensions(wf, width, height)
 
-    # 5. LoRA del personaggio — il cuore: senza questo il personaggio non esiste
+    # 5. LoRA — il cuore: senza questo il personaggio non esiste.
+    #    Se la view passa una lista esplicita ("loras") si impilano LoRA del
+    #    personaggio + extra dell'utente; altrimenti resta il singolo LoRA del
+    #    progetto (comportamento storico delle altre ricette).
+    default_weight = float(user_params.get("lora_weight", 0.85))
     lora_name: Optional[str] = None
-    lora_weight: Optional[float] = float(user_params.get("lora_weight", 0.85))
-    if project.active_lora is not None:
+    lora_weight: Optional[float] = default_weight
+    if "loras" in user_params:
+        specs = _collect_lora_specs(project, user_params, default_weight)
+        if "lora" in wf.mapping:
+            try:
+                wf.set_loras(specs)
+            except KeyError:
+                logger.warning("Mapping LoRA mancante nel workflow: stacking saltato")
+        if specs:
+            primary_path, primary_weight = specs[0]
+            lora_name = Path(primary_path).name
+            lora_weight = primary_weight
+        else:
+            logger.warning(
+                "Nessun LoRA risolvibile — generazione senza stile personaggio"
+            )
+            lora_weight = None
+    elif project.active_lora is not None:
         lora_path = _resolve_lora_path(project)
         if lora_path is not None:
-            wf.set_lora(str(lora_path), lora_weight)
+            wf.set_lora(str(lora_path), default_weight)
             lora_name = lora_path.name
         else:
             logger.warning(
@@ -476,6 +496,40 @@ def _safe_set_dimensions(wf: WorkflowTemplate, width: int, height: int) -> None:
         wf.set_dimensions(width, height)
     except KeyError as exc:
         logger.warning("Mapping dimensioni mancante nel workflow: %s", exc)
+
+
+def _collect_lora_specs(
+    project: Project,
+    user_params: dict[str, Any],
+    default_weight: float,
+) -> list[tuple[str, float]]:
+    """Ordina i LoRA da impilare: prima quello del personaggio (progetto),
+    poi gli extra scelti dall'utente nella GenerateView.
+
+    Ogni LoRA del progetto usa il proprio peso configurato; gli extra usano il
+    peso del rispettivo slider. I path non risolvibili vengono saltati."""
+    specs: list[tuple[str, float]] = []
+    if project.active_lora is not None:
+        lora_path = _resolve_lora_path(project)
+        if lora_path is not None:
+            char_weight = float(
+                getattr(project.active_lora, "weight", default_weight) or default_weight
+            )
+            specs.append((str(lora_path), char_weight))
+        else:
+            logger.warning(
+                "LoRA progetto '%s' non trovato su disco — saltato nello stacking",
+                project.active_lora.checkpoint,
+            )
+    for entry in user_params.get("loras", []):
+        if not isinstance(entry, dict):
+            continue
+        path = entry.get("path")
+        if not path:
+            continue
+        weight = float(entry.get("weight", default_weight))
+        specs.append((str(path), weight))
+    return specs
 
 
 def _resolve_lora_path(project: Project) -> Optional[Path]:
