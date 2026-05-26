@@ -12,6 +12,10 @@ SUSPICIOUS_PICKLE — pickle senza import pericolosi (richiede override esplicit
 DANGEROUS        — pickle con import pericolosi → blocca sempre, non caricare mai
 UNKNOWN          — formato non riconosciuto o file non leggibile
 
+Per i file rischiosi `build_report()` produce un resoconto leggibile che
+spiega COSA è stato trovato e PERCHÉ è pericoloso, così l'utente può
+decidere consapevolmente se procedere.
+
 Nessuna dipendenza esterna: stdlib pura (struct, json, pickletools, zipfile, hashlib).
 """
 from __future__ import annotations
@@ -41,6 +45,24 @@ class ScanVerdict(str, Enum):
 
 
 @dataclass
+class Finding:
+    """Un singolo import pericoloso rilevato in un pickle, con spiegazione."""
+
+    module: str
+    name: str
+    opcode: str      # "GLOBAL" o "STACK_GLOBAL"
+    category: str    # chiave categoria di rischio
+    label: str       # etichetta leggibile della categoria
+    why: str         # spiegazione del perché è pericoloso
+
+    def target(self) -> str:
+        return self.module if not self.name else f"{self.module}.{self.name}"
+
+    def short(self) -> str:
+        return f"{self.target()} [{self.label}]"
+
+
+@dataclass
 class ScanResult:
     path: Path
     verdict: ScanVerdict
@@ -48,6 +70,7 @@ class ScanResult:
     file_format: str        # "safetensors" | "pickle_zip" | "pickle_raw" | "unknown"
     issues: list[str] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)   # __metadata__ del safetensors
+    findings: list[Finding] = field(default_factory=list)  # import pericolosi nei pickle
 
     @property
     def is_safe_to_use(self) -> bool:
@@ -68,32 +91,113 @@ class ScanResult:
         detail = "; ".join(self.issues) if self.issues else self.file_format
         return f"[{label}] {detail}"
 
+    def report(self) -> str:
+        """Resoconto leggibile da mostrare all'utente (vedi build_report)."""
+        return build_report(self)
+
 
 # ---------------------------------------------------------------------------
-# Blacklist import pericolosi
+# Categorie di rischio — singola fonte di verità.
+# La blacklist (moduli/nomi) è derivata da qui; ogni categoria porta con sé
+# l'etichetta e la spiegazione mostrate nel report all'utente.
 # ---------------------------------------------------------------------------
 
-_DANGEROUS_MODULES = frozenset({
-    "os", "posix", "nt",
-    "subprocess",
-    "sys",
-    "socket", "socketserver", "http", "urllib", "ftplib", "smtplib",
-    "builtins", "__builtin__", "__builtins__",
-    "runpy", "importlib", "pty",
-    "ctypes", "cffi",
-    "code", "codeop", "compileall",
-    "requests", "httpx", "aiohttp", "paramiko", "fabric",
-    "multiprocessing",
-    "distutils", "setuptools", "pip",
-    "pickle", "marshal",   # ricaricare deserializzatori dentro un pickle
-})
+_RISK_CATEGORIES: dict[str, dict] = {
+    "esecuzione_comandi": {
+        "modules": {"os", "posix", "nt", "subprocess", "pty"},
+        "names": {"system", "popen", "Popen"},
+        "label": "Esecuzione di comandi di sistema",
+        "why": (
+            "Può eseguire qualsiasi comando sul computer (cancellare file, "
+            "installare malware, esfiltrare dati). Un file di pesi non ne ha bisogno."
+        ),
+    },
+    "rete": {
+        "modules": {
+            "socket", "socketserver", "http", "urllib", "ftplib", "smtplib",
+            "requests", "httpx", "aiohttp", "paramiko", "fabric",
+        },
+        "label": "Accesso alla rete",
+        "why": (
+            "Può connettersi a server remoti per scaricare payload aggiuntivi "
+            "o inviare i tuoi dati all'esterno senza che tu te ne accorga."
+        ),
+    },
+    "esecuzione_codice": {
+        "modules": {"builtins", "__builtin__", "__builtins__", "code", "codeop", "compileall"},
+        "names": {"exec", "eval", "compile", "execfile"},
+        "label": "Esecuzione di codice Python arbitrario",
+        "why": (
+            "Può eseguire codice Python costruito al volo, spesso usato per "
+            "nascondere le reali intenzioni dietro stringhe offuscate."
+        ),
+    },
+    "import_dinamico": {
+        "modules": {"importlib", "runpy"},
+        "names": {"__import__"},
+        "label": "Import dinamico di moduli",
+        "why": (
+            "Carica moduli a runtime: tecnica comune per nascondere quali "
+            "librerie pericolose vengono effettivamente usate."
+        ),
+    },
+    "basso_livello": {
+        "modules": {"ctypes", "cffi"},
+        "label": "Accesso a memoria e librerie native",
+        "why": (
+            "Interagisce direttamente con la memoria e le librerie di sistema, "
+            "aggirando le protezioni di Python."
+        ),
+    },
+    "packaging": {
+        "modules": {"pip", "setuptools", "distutils"},
+        "label": "Installazione di pacchetti",
+        "why": "Può scaricare e installare software aggiuntivo senza il tuo consenso.",
+    },
+    "deserializzazione": {
+        "modules": {"pickle", "marshal"},
+        "label": "Deserializzazione annidata",
+        "why": (
+            "Carica un secondo blocco di dati serializzati: tecnica di "
+            "offuscamento per nascondere un payload dentro il payload."
+        ),
+    },
+    "interprete": {
+        "modules": {"sys", "multiprocessing"},
+        "label": "Accesso agli interni dell'interprete",
+        "why": "Manipola lo stato dell'interprete Python o avvia processi paralleli.",
+    },
+}
 
-_DANGEROUS_NAMES = frozenset({
-    "system", "popen",
-    "exec", "eval", "compile", "execfile",
-    "__import__",
-    "Popen",
-})
+_DANGEROUS_MODULES = frozenset().union(
+    *(cat.get("modules", frozenset()) for cat in _RISK_CATEGORIES.values())
+)
+_DANGEROUS_NAMES = frozenset().union(
+    *(cat.get("names", frozenset()) for cat in _RISK_CATEGORIES.values())
+)
+
+
+def _classify(module: str, name: str) -> tuple[str, str, str]:
+    """Mappa (module, name) alla categoria di rischio → (chiave, label, why)."""
+    for key, cat in _RISK_CATEGORIES.items():
+        if module in cat.get("modules", frozenset()) or name in cat.get("names", frozenset()):
+            return key, cat["label"], cat["why"]
+    return (
+        "sconosciuto",
+        "Import non riconosciuto",
+        "Riferimento a un global non previsto in un file di pesi; origine incerta.",
+    )
+
+
+def _maybe_finding(module: str, name: str, opcode: str) -> Finding | None:
+    """Crea un Finding se (module, name) è pericoloso, altrimenti None."""
+    if module in _DANGEROUS_MODULES or name in _DANGEROUS_NAMES:
+        category, label, why = _classify(module, name)
+        return Finding(
+            module=module, name=name, opcode=opcode,
+            category=category, label=label, why=why,
+        )
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -167,23 +271,24 @@ def _parse_safetensors(data: bytes) -> tuple[bool, list[str], dict]:
 # ---------------------------------------------------------------------------
 
 
-def _scan_pickle_bytes(data: bytes) -> tuple[list[str], bool]:
+def _scan_pickle_bytes(data: bytes) -> tuple[list[Finding], list[str]]:
     """Scansiona opcode pickle senza eseguire nulla.
 
     Usa una finestra scorrevole sulle ultime 2 string literal per catturare
-    sia GLOBAL (proto ≤ 3: "module\\nname") che STACK_GLOBAL (proto ≥ 4:
+    sia GLOBAL (proto ≤ 3: "module name") che STACK_GLOBAL (proto ≥ 4:
     string + string + STACK_GLOBAL).
 
-    Ritorna (issues, has_dangerous).
+    Ritorna (findings, issues) dove findings sono import pericolosi (rendono
+    il file DANGEROUS) e issues sono note diagnostiche (es. parse error).
     """
+    findings: list[Finding] = []
     issues: list[str] = []
-    has_dangerous = False
     recent_strings: list[str] = []
 
     try:
         ops = list(pickletools.genops(io.BytesIO(data)))
     except Exception as exc:
-        return [f"pickle non analizzabile: {exc}"], False
+        return findings, [f"pickle non analizzabile: {exc}"]
 
     for opcode, arg, _pos in ops:
         name = opcode.name
@@ -202,9 +307,9 @@ def _scan_pickle_bytes(data: bytes) -> tuple[list[str], bool]:
             parts = str(arg).split(None, 1)
             module = parts[0] if parts else ""
             callable_name = parts[1] if len(parts) > 1 else ""
-            if module in _DANGEROUS_MODULES or callable_name in _DANGEROUS_NAMES:
-                issues.append(f"import pericoloso: {module}.{callable_name}")
-                has_dangerous = True
+            found = _maybe_finding(module, callable_name, "GLOBAL")
+            if found:
+                findings.append(found)
 
         elif name == "STACK_GLOBAL":
             # Formato moderno (proto ≥ 4): module e name sono in cima allo stack
@@ -214,21 +319,18 @@ def _scan_pickle_bytes(data: bytes) -> tuple[list[str], bool]:
                 module, callable_name = recent_strings[-1], ""
             else:
                 module, callable_name = "?", "?"
+            found = _maybe_finding(module, callable_name, "STACK_GLOBAL")
+            if found:
+                findings.append(found)
 
-            if module in _DANGEROUS_MODULES or callable_name in _DANGEROUS_NAMES:
-                issues.append(
-                    f"import pericoloso (STACK_GLOBAL): {module}.{callable_name}"
-                )
-                has_dangerous = True
-
-    return issues, has_dangerous
+    return findings, issues
 
 
 def _scan_as_pickle(path: Path, data: bytes, sha256: str) -> ScanResult:
     """Scansiona data come pickle — raw o zip-wrapped (PyTorch .pt moderni)."""
     file_format = "pickle_raw"
+    findings: list[Finding] = []
     issues: list[str] = []
-    has_dangerous = False
 
     if data[:4] == b"PK\x03\x04":
         file_format = "pickle_zip"
@@ -241,7 +343,7 @@ def _scan_as_pickle(path: Path, data: bytes, sha256: str) -> ScanResult:
                         sha256=sha256, file_format="zip_no_pkl",
                         issues=["archivio ZIP senza .pkl interno riconoscibile"],
                     )
-                issues, has_dangerous = _scan_pickle_bytes(zf.read(pkl_names[0]))
+                findings, issues = _scan_pickle_bytes(zf.read(pkl_names[0]))
         except zipfile.BadZipFile as exc:
             return ScanResult(
                 path=path, verdict=ScanVerdict.UNKNOWN,
@@ -249,13 +351,15 @@ def _scan_as_pickle(path: Path, data: bytes, sha256: str) -> ScanResult:
                 issues=[f"ZIP malformato: {exc}"],
             )
     else:
-        issues, has_dangerous = _scan_pickle_bytes(data)
+        findings, issues = _scan_pickle_bytes(data)
 
-    verdict = ScanVerdict.DANGEROUS if has_dangerous else ScanVerdict.SUSPICIOUS_PICKLE
+    verdict = ScanVerdict.DANGEROUS if findings else ScanVerdict.SUSPICIOUS_PICKLE
+    # issues mostra prima le note diagnostiche, poi i findings in forma breve
     return ScanResult(
         path=path, verdict=verdict,
         sha256=sha256, file_format=file_format,
-        issues=issues,
+        issues=issues + [f.short() for f in findings],
+        findings=findings,
     )
 
 
@@ -325,3 +429,114 @@ def _sha256(path: Path) -> str:
         return h.hexdigest()
     except OSError:
         return ""
+
+
+# ---------------------------------------------------------------------------
+# Report leggibile per l'utente
+# ---------------------------------------------------------------------------
+
+_FORMAT_LABELS = {
+    "safetensors": "safetensors (solo dati, nessun codice)",
+    "pickle_raw": "pickle grezzo (può contenere codice)",
+    "pickle_zip": "pickle in archivio ZIP / PyTorch (può contenere codice)",
+    "zip_no_pkl": "archivio ZIP non riconosciuto",
+    "unknown": "sconosciuto",
+}
+
+
+def build_report(result: ScanResult) -> str:
+    """Costruisce un resoconto leggibile da mostrare all'utente.
+
+    Spiega cosa è stato trovato e perché è (o non è) pericoloso, così
+    l'utente può decidere se procedere. La decisione resta sua: le proprietà
+    `is_blocked` e `requires_override` indicano alla UI come comportarsi.
+    """
+    bar = "═" * 64
+    sha = result.sha256[:32] + "…" if len(result.sha256) > 32 else result.sha256
+    lines = [
+        bar,
+        "  REPORT DI SICUREZZA — file modello",
+        bar,
+        f"File:     {result.path.name}",
+        f"Formato:  {_FORMAT_LABELS.get(result.file_format, result.file_format)}",
+        f"SHA256:   {sha}",
+        "",
+    ]
+
+    if result.verdict == ScanVerdict.SAFE:
+        lines += [
+            "VERDETTO: SICURO",
+            "",
+            "File safetensors strutturalmente valido. Contiene solo dati numerici",
+            "(pesi del modello), nessun codice eseguibile. Caricamento sicuro.",
+        ]
+        st = f"{result.metadata.get('_tensor_count', '?')} tensori"
+        lk = result.metadata.get("_lora_keys")
+        if lk and lk != "0":
+            st += f", {lk} chiavi LoRA riconosciute"
+        lines += ["", f"Struttura: {st}."]
+
+    elif result.verdict == ScanVerdict.DANGEROUS:
+        lines += [
+            "VERDETTO: PERICOLOSO — NON CARICARE",
+            "",
+            "Un file di pesi legittimo contiene solo numeri. Questo file include",
+            "invece istruzioni che eseguono codice nel momento in cui viene aperto.",
+            "Elementi rilevati:",
+            "",
+        ]
+        for f in result.findings:
+            lines += [
+                f"  [!] {f.target()}   (opcode {f.opcode})",
+                f"      Categoria: {f.label}",
+                f"      Rischio:   {f.why}",
+                "",
+            ]
+        lines += [
+            "RACCOMANDAZIONE: non caricare questo file in ComfyUI/PyTorch.",
+            "Eliminalo o tienilo in quarantena. Se l'hai scaricato, diffida",
+            "della fonte: i modelli affidabili sono distribuiti in .safetensors.",
+        ]
+
+    elif result.verdict == ScanVerdict.SUSPICIOUS_PICKLE:
+        lines += [
+            "VERDETTO: SOSPETTO — richiede la tua conferma",
+            "",
+            "Questo file usa il formato 'pickle', che PUÒ contenere codice",
+            "eseguibile. La scansione NON ha trovato import pericolosi noti,",
+            "ma l'analisi statica non è una garanzia assoluta: tecniche di",
+            "offuscamento avanzate potrebbero eluderla.",
+        ]
+        if result.issues:
+            lines += ["", "Note tecniche:"]
+            lines += [f"  • {i}" for i in result.issues]
+        lines += [
+            "",
+            "Se esiste, preferisci la versione .safetensors dello stesso modello.",
+            "Procedi solo se ti fidi della fonte: serve la tua conferma esplicita.",
+        ]
+
+    elif result.verdict == ScanVerdict.SUSPICIOUS:
+        lines += [
+            "VERDETTO: SOSPETTO — anomalie strutturali",
+            "",
+            "Il file si presenta come safetensors ma la struttura è anomala:",
+        ]
+        lines += [f"  • {i}" for i in result.issues]
+        lines += [
+            "",
+            "Potrebbe essere corrotto o manomesso. Verifica la provenienza",
+            "prima di usarlo.",
+        ]
+
+    else:  # UNKNOWN
+        lines += [
+            "VERDETTO: FORMATO SCONOSCIUTO — bloccato",
+            "",
+            "Impossibile analizzare il file in sicurezza:",
+        ]
+        lines += [f"  • {i}" for i in result.issues]
+        lines += ["", "In assenza di garanzie, non caricarlo."]
+
+    lines.append(bar)
+    return "\n".join(lines)

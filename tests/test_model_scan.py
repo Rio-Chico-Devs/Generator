@@ -14,7 +14,7 @@ import tempfile
 import zipfile
 from pathlib import Path
 
-from src.utils.model_scan import ScanVerdict, scan_model_file
+from src.utils.model_scan import ScanVerdict, build_report, scan_model_file
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +69,15 @@ class _Malicious:
 
     def __reduce__(self):
         return (os.system, ("echo hacked",))
+
+
+class _NetworkMalicious:
+    """Oggetto pickle che referenzia un modulo di rete (socket)."""
+
+    def __reduce__(self):
+        import socket
+
+        return (socket.socket, ())
 
 
 # ---------------------------------------------------------------------------
@@ -252,3 +261,79 @@ def test_summary_dangerous_contains_issue():
     s = r.summary()
     assert "DANGEROUS" in s
     assert "os" in s or "posix" in s
+
+
+# ---------------------------------------------------------------------------
+# Findings strutturati e classificazione del rischio
+# ---------------------------------------------------------------------------
+
+
+def test_findings_populated_on_dangerous():
+    pkl = pickle.dumps(_Malicious(), protocol=2)
+    with tempfile.TemporaryDirectory() as d:
+        r = scan_model_file(_save(d, "e.pt", pkl))
+    assert len(r.findings) >= 1
+    f = r.findings[0]
+    assert f.module in ("os", "posix")
+    assert f.category == "esecuzione_comandi"
+    assert f.opcode == "GLOBAL"
+
+
+def test_findings_classify_network_module():
+    pkl = pickle.dumps(_NetworkMalicious(), protocol=2)
+    with tempfile.TemporaryDirectory() as d:
+        r = scan_model_file(_save(d, "net.pt", pkl))
+    assert r.verdict == ScanVerdict.DANGEROUS
+    assert any(f.category == "rete" for f in r.findings)
+
+
+def test_clean_pickle_has_no_findings():
+    pkl = pickle.dumps({"weight": [1.0, 2.0, 3.0]})
+    with tempfile.TemporaryDirectory() as d:
+        r = scan_model_file(_save(d, "clean.pt", pkl))
+    assert r.findings == []
+    assert r.verdict == ScanVerdict.SUSPICIOUS_PICKLE
+
+
+# ---------------------------------------------------------------------------
+# build_report — resoconto leggibile per l'utente
+# ---------------------------------------------------------------------------
+
+
+def test_report_dangerous_explains_risk():
+    pkl = pickle.dumps(_Malicious(), protocol=2)
+    with tempfile.TemporaryDirectory() as d:
+        r = scan_model_file(_save(d, "evil.pt", pkl))
+    report = build_report(r)
+    assert "PERICOLOSO" in report
+    assert "NON CARICARE" in report
+    # deve includere la spiegazione del rischio, non solo il nome del modulo
+    assert "Esecuzione di comandi di sistema" in report
+    assert "Rischio:" in report
+    # e l'hash per tracciabilità
+    assert r.sha256[:16] in report
+
+
+def test_report_suspicious_pickle_asks_confirmation():
+    pkl = pickle.dumps({"weight": [1.0, 2.0]})
+    with tempfile.TemporaryDirectory() as d:
+        r = scan_model_file(_save(d, "clean.pt", pkl))
+    report = build_report(r)
+    assert "SOSPETTO" in report
+    assert "conferma" in report.lower()
+    assert "safetensors" in report
+
+
+def test_report_safe_reassures():
+    with tempfile.TemporaryDirectory() as d:
+        r = scan_model_file(_save(d, "ok.safetensors", _make_safetensors({"lora_up": 4})))
+    report = build_report(r)
+    assert "SICURO" in report
+    assert "nessun codice eseguibile" in report
+
+
+def test_report_accessible_via_result_method():
+    pkl = pickle.dumps(_Malicious(), protocol=2)
+    with tempfile.TemporaryDirectory() as d:
+        r = scan_model_file(_save(d, "evil.pt", pkl))
+    assert r.report() == build_report(r)
