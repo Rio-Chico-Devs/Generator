@@ -192,6 +192,7 @@ class RecipeWorker(QThread):
                 if src.resolve() != dest.resolve():
                     shutil.copy2(src, dest)
                 _write_sidecar(dest, record, seed_i)
+                _embed_metadata(dest, record, seed_i)
                 final_paths.append(dest)
                 self.image_ready.emit(dest)
 
@@ -248,8 +249,8 @@ class RecipeWorker(QThread):
 # Chiavi con semantica speciale: gestite esplicitamente sopra, non passate
 # a set_role nel loop residuo.
 _HANDLED_KEYS = frozenset(
-    {"prompt", "negative", "seed", "width", "height", "lora_weight",
-     "variants", "batch"}
+    {"prompt", "scene_prompt", "negative", "seed", "width", "height",
+     "lora_weight", "variants", "batch"}
 )
 
 
@@ -277,9 +278,14 @@ def _parametrize(
     #    CLIP skip) combinato con trigger del progetto e input utente.
     dialect = dialect_for_model(model_id)
     preset = get_preset(dialect)
+    # Alcune ricette usano "scene_prompt" invece di "prompt" (es. prodotto in
+    # scena): accetta entrambe come descrizione positiva.
+    user_positive = str(
+        user_params.get("prompt") or user_params.get("scene_prompt") or ""
+    )
     built = build_prompts(
         preset,
-        user_positive=str(user_params.get("prompt", "")),
+        user_positive=user_positive,
         trigger_prefix=project.trigger_prompt_prefix or "",
         user_negative=str(user_params.get("negative", "")),
         project_negative=project.default_negative_prompt or "",
@@ -413,6 +419,24 @@ def _write_sidecar(image_path: Path, record: GenerationRecord, seed: int) -> Non
         )
     except OSError as exc:
         logger.warning("Sidecar non scritto per %s: %s", image_path.name, exc)
+
+
+def _embed_metadata(image_path: Path, record: GenerationRecord, seed: int) -> None:
+    """Inietta i parametri in formato A1111 dentro il PNG (portabilità).
+
+    Affianca il sidecar JSON: il chunk tEXt ``parameters`` rende l'immagine
+    leggibile da A1111/Civitai/ComfyUI. Best-effort: non blocca mai la
+    generazione (PIL opzionale, file non-PNG, errori I/O)."""
+    if image_path.suffix.lower() != ".png":
+        return
+    data = asdict(record)
+    data["seed"] = seed
+    try:
+        from src.utils.metadata import build_a1111_parameters, embed_a1111_parameters
+
+        embed_a1111_parameters(image_path, build_a1111_parameters(data))
+    except Exception as exc:  # PIL assente o errore inatteso: non fatale
+        logger.warning("Embed metadati A1111 fallito per %s: %s", image_path.name, exc)
 
 
 def _role_or_none(wf: WorkflowTemplate, role: str) -> Any:

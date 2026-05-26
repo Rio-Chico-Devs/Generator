@@ -52,16 +52,3 @@ class GenerationConfig:
     # Metadata extra
     project_slug: str = ""
     activator_tag: str = ""
-
-
-@dataclass
-class GenerationResult:
-    """Risultato di una generazione, da serializzare in sidecar JSON."""
-
-    image_path: str
-    config: GenerationConfig
-    actual_seed: int
-    generation_time_sec: float
-    model_hash: str = ""
-    app_version: str = "0.1.0"
-    created_at: str = ""

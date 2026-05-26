@@ -1,0 +1,35 @@
+{
+  "_meta": {
+    "recipe": "character_in_pose",
+    "phase": 3,
+    "requires_custom_nodes": [
+      "comfyui_controlnet_aux (nodo DWPreprocessor + onnx yolox_l / dw-ll_ucoco_384)",
+      "ComfyUI_IPAdapter_plus (nodi IPAdapterUnifiedLoaderFaceID + IPAdapterFaceID, richiede insightface)"
+    ],
+    "validate_on_real_comfy": true,
+    "note": "Pipeline: posa (DWPose->ControlNet OpenPose) + identità personaggio (IPAdapter FaceID Plus v2) + stile (LoRA). I class_type dei nodi custom vanno verificati contro le versioni installate: cambiano tra fork. 'pose' è una reference image (verrà estratto lo scheletro); 'character' sono 1-3 immagini del volto. autofix_hands/autofix_face non sono ancora nel grafo (futuri: FaceDetailer/Impact Pack)."
+  },
+  "checkpoint": { "node": "4", "field": "ckpt_name" },
+  "positive_prompt": { "node": "6", "field": "text" },
+  "negative_prompt": { "node": "7", "field": "text" },
+  "seed": { "node": "3", "field": "seed" },
+  "steps": { "node": "3", "field": "steps" },
+  "cfg": { "node": "3", "field": "cfg" },
+  "sampler": { "node": "3", "field": "sampler_name" },
+  "scheduler": { "node": "3", "field": "scheduler" },
+  "denoise": { "node": "3", "field": "denoise" },
+  "clip_skip": { "node": "11", "field": "stop_at_clip_layer" },
+  "width": { "node": "5", "field": "width" },
+  "height": { "node": "5", "field": "height" },
+  "pose": { "node": "20" },
+  "character": { "node": "23" },
+  "pose_weight": { "node": "24", "field": "strength" },
+  "face_weight": { "node": "31", "field": "weight" },
+  "controlnet": { "node": "22", "field": "control_net_name" },
+  "lora": {
+    "node": "10",
+    "name_field": "lora_name",
+    "model_weight_field": "strength_model",
+    "clip_weight_field": "strength_clip"
+  }
+}
