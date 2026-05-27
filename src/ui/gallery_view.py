@@ -49,6 +49,7 @@ from src.core.gallery import (
     remove_item,
     set_rating,
 )
+# add_to_dataset viene riusato anche per i negativi (stessa copia file)
 from src.core.project import Project
 
 logger = logging.getLogger(__name__)
@@ -194,6 +195,17 @@ class GalleryView(QWidget):
         bulk.addWidget(self.fork_btn)
         left.addLayout(bulk)
 
+        neg_row = QHBoxLayout()
+        self.add_neg_btn = QPushButton("👎 → Negativi  (salva scarti come riferimento)")
+        self.add_neg_btn.setToolTip(
+            "Copia le immagini 👎 nella cartella 'negativi' del progetto.\n"
+            "Visibili nel Dataset Inspector → tab Negativi:\n"
+            "utili per analizzare i pattern degli errori."
+        )
+        self.add_neg_btn.clicked.connect(self._on_add_all_negative)
+        neg_row.addWidget(self.add_neg_btn)
+        left.addLayout(neg_row)
+
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
 
@@ -281,6 +293,7 @@ class GalleryView(QWidget):
         has_project = self._project is not None
         self.add_all_btn.setEnabled(has_project)
         self.fork_btn.setEnabled(has_project)
+        self.add_neg_btn.setEnabled(has_project)
 
         if self._project is None:
             self._items = []
@@ -406,6 +419,36 @@ class GalleryView(QWidget):
         if skipped:
             msg += f"\n{len(skipped)} non copiabili (vedi log)."
         QMessageBox.information(self, "Dataset aggiornato", msg)
+
+    def _on_add_all_negative(self) -> None:
+        """Copia le immagini 👎 visibili nella cartella negativi del progetto."""
+        if self._project is None:
+            return
+        rejects = [it for it in self._items if it.rating == RATING_REJECT]
+        if not rejects:
+            QMessageBox.information(
+                self, "Nessuno scarto",
+                "Nessuna immagine marcata 👎 nella vista corrente.\n\n"
+                "Valuta con 👎 le immagini da dimenticare, poi salvale qui\n"
+                "come riferimento per analizzare i pattern degli errori.",
+            )
+            return
+        dst = self._project.negatives_dir
+        added, skipped = [], []
+        for item in rejects:
+            try:
+                add_to_dataset(item, dst)
+                added.append(item.name)
+            except OSError:
+                skipped.append(item.name)
+        msg = (
+            f"{len(added)} scarti salvati nella cartella Negativi.\n\n"
+            "Aprili dal Dataset Inspector (tab 👎 Negativi) per analizzare\n"
+            "cosa ha capito male il modello."
+        )
+        if skipped:
+            msg += f"\n{len(skipped)} non copiabili (vedi log)."
+        QMessageBox.information(self, "Negativi aggiornati", msg)
 
     def _on_fork_variant(self) -> None:
         """Crea un progetto variante seminato con le immagini 🔀 della vista."""

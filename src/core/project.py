@@ -125,6 +125,11 @@ class Project:
         return self.root / "gallery"
 
     @property
+    def negatives_dir(self) -> Path:
+        """Immagini 👎 scartate: riferimento negativo per il training futuro."""
+        return self.root / "negatives"
+
+    @property
     def prompts_dir(self) -> Path:
         return self.root / "prompts"
 
@@ -217,6 +222,7 @@ class Project:
             project.training_runs_dir,
             project.generations_dir,
             project.gallery_dir,
+            project.negatives_dir,
             project.prompts_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)

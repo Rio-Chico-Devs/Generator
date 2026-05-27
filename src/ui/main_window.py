@@ -201,7 +201,11 @@ class MainWindow(QMainWindow):
         self.workspace = QStackedWidget()
         self._views: dict[str, QWidget] = {}
         for name in ("Dataset", "Train", "Generate", "Gallery"):
-            if name == "Generate":
+            if name == "Dataset":
+                from src.ui.dataset_view import DatasetView
+                v = DatasetView()
+                self._dataset_view = v
+            elif name == "Generate":
                 from src.ui.generate_view import GenerateView
                 v = GenerateView()
                 v.set_wallet(self._wallet)
@@ -272,6 +276,9 @@ class MainWindow(QMainWindow):
             gal = getattr(self, "_gallery_view", None)
             if gal is not None:
                 gal.set_project(self._current_project)
+            dv = getattr(self, "_dataset_view", None)
+            if dv is not None:
+                dv.set_project(self._current_project)
             self._render_status()
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Caricamento progetto fallito:\n{e}")
@@ -301,11 +308,15 @@ class MainWindow(QMainWindow):
         view = self._views.get(name)
         if view is None:
             return
-        # Entrando in Galleria, ricarica per mostrare le immagini più recenti.
+        # Entrando in Galleria/Dataset, ricarica per mostrare i dati più recenti.
         if name == "Gallery":
             gal = getattr(self, "_gallery_view", None)
             if gal is not None:
                 gal.refresh()
+        elif name == "Dataset":
+            dv = getattr(self, "_dataset_view", None)
+            if dv is not None and self._current_project is not None:
+                dv.set_project(self._current_project)
         self.workspace.setCurrentWidget(view)
 
     def _on_reuse_params(self, params: dict) -> None:
