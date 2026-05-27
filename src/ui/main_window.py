@@ -173,7 +173,7 @@ class MainWindow(QMainWindow):
 
         toolbar.addSeparator()
 
-        for view_name in ("Dataset", "Train", "Generate", "Gallery"):
+        for view_name in ("Dataset", "Train", "Guidato", "Generate", "Gallery", "Tecniche", "Diario"):
             a = QAction(view_name, self)
             a.triggered.connect(lambda checked, n=view_name: self._switch_view(n))
             toolbar.addAction(a)
@@ -200,7 +200,7 @@ class MainWindow(QMainWindow):
         # Workspace (stacked views)
         self.workspace = QStackedWidget()
         self._views: dict[str, QWidget] = {}
-        for name in ("Dataset", "Train", "Generate", "Gallery"):
+        for name in ("Dataset", "Train", "Guidato", "Generate", "Gallery", "Tecniche", "Diario"):
             if name == "Dataset":
                 from src.ui.dataset_view import DatasetView
                 v = DatasetView()
@@ -223,6 +223,21 @@ class MainWindow(QMainWindow):
                 v.reuse_requested.connect(self._on_reuse_params)
                 v.projects_changed.connect(self._refresh_projects_list)
                 self._gallery_view = v
+            elif name == "Guidato":
+                from src.ui.guided_training_view import GuidedTrainingView
+                v = GuidedTrainingView()
+                v.session_saved_to_gallery.connect(self._on_guided_save_to_gallery)
+                v.switch_to_dataset.connect(lambda: self._switch_view("Dataset"))
+                v.switch_to_technique_library.connect(lambda: self._switch_view("Tecniche"))
+                self._guided_view = v
+            elif name == "Tecniche":
+                from src.ui.technique_library_view import TechniqueLibraryView
+                v = TechniqueLibraryView()
+                self._technique_view = v
+            elif name == "Diario":
+                from src.ui.diary_stats_view import DiaryStatsView
+                v = DiaryStatsView()
+                self._diary_view = v
             else:
                 v = _PlaceholderView(name)
             self._views[name] = v
@@ -279,6 +294,15 @@ class MainWindow(QMainWindow):
             dv = getattr(self, "_dataset_view", None)
             if dv is not None:
                 dv.set_project(self._current_project)
+            guided = getattr(self, "_guided_view", None)
+            if guided is not None:
+                guided.set_project(self._current_project)
+            tech = getattr(self, "_technique_view", None)
+            if tech is not None:
+                tech.set_project(self._current_project)
+            diary = getattr(self, "_diary_view", None)
+            if diary is not None:
+                diary.set_project(self._current_project)
             self._render_status()
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Caricamento progetto fallito:\n{e}")
@@ -308,7 +332,7 @@ class MainWindow(QMainWindow):
         view = self._views.get(name)
         if view is None:
             return
-        # Entrando in Galleria/Dataset, ricarica per mostrare i dati più recenti.
+        # Entrando in Galleria/Dataset/Diario, ricarica per mostrare i dati più recenti.
         if name == "Gallery":
             gal = getattr(self, "_gallery_view", None)
             if gal is not None:
@@ -317,7 +341,32 @@ class MainWindow(QMainWindow):
             dv = getattr(self, "_dataset_view", None)
             if dv is not None and self._current_project is not None:
                 dv.set_project(self._current_project)
+        elif name == "Diario":
+            diary = getattr(self, "_diary_view", None)
+            if diary is not None:
+                diary.set_project(self._current_project)
+        elif name == "Tecniche":
+            tech = getattr(self, "_technique_view", None)
+            if tech is not None and self._current_project is not None:
+                tech.set_project(self._current_project)
         self.workspace.setCurrentWidget(view)
+
+    def _on_guided_save_to_gallery(self, image_path: Path) -> None:
+        """Copia l'immagine finale della sessione guidata nella gallery del progetto."""
+        if self._current_project is None:
+            return
+        import shutil as _shutil
+        dest_dir = self._current_project.gallery_dir
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = dest_dir / image_path.name
+        if not dest.exists():
+            _shutil.copy2(image_path, dest)
+        # Copia anche sidecar
+        sidecar = image_path.with_suffix(".json")
+        if sidecar.exists():
+            _shutil.copy2(sidecar, dest.with_suffix(".json"))
+        # Passa alla gallery
+        self._switch_view("Gallery")
 
     def _on_reuse_params(self, params: dict) -> None:
         """Riusa i parametri di un'immagine: pre-compila Genera e ci passa."""
@@ -353,6 +402,9 @@ class MainWindow(QMainWindow):
             gv = getattr(self, "_generate_view", None)
             if gv is not None:
                 gv.set_comfy_client(self._comfy_client)
+            guided = getattr(self, "_guided_view", None)
+            if guided is not None:
+                guided.set_comfy_client(self._comfy_client)
             self._render_status()
             return
 
@@ -382,6 +434,9 @@ class MainWindow(QMainWindow):
         gv = getattr(self, "_generate_view", None)
         if gv is not None:
             gv.set_comfy_client(self._comfy_client)
+        guided = getattr(self, "_guided_view", None)
+        if guided is not None:
+            guided.set_comfy_client(self._comfy_client)
         self._render_status()
 
     def _on_comfy_failed(self, msg: str) -> None:

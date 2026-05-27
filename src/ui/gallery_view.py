@@ -260,6 +260,13 @@ class GalleryView(QWidget):
         self.add_dataset_btn.clicked.connect(self._on_add_to_dataset)
         v.addWidget(self.add_dataset_btn)
 
+        self.add_technique_btn = QPushButton("🎨 → Libreria Tecniche")
+        self.add_technique_btn.setToolTip(
+            "Usa questa immagine come riferimento visivo in un slot della Libreria Tecniche"
+        )
+        self.add_technique_btn.clicked.connect(self._on_add_to_technique_library)
+        v.addWidget(self.add_technique_btn)
+
         self.reuse_btn = QPushButton("Usa questi parametri")
         self.reuse_btn.setToolTip(
             "Pre-compila la schermata Genera con prompt, seed e impostazioni"
@@ -348,6 +355,7 @@ class GalleryView(QWidget):
         self.open_btn.setEnabled(enabled)
         self.delete_btn.setEnabled(enabled)
         self.add_dataset_btn.setEnabled(enabled and self._project is not None)
+        self.add_technique_btn.setEnabled(enabled and self._project is not None)
         self.rate_keep.setEnabled(enabled)
         self.rate_variant.setEnabled(enabled)
         self.rate_reject.setEnabled(enabled)
@@ -395,6 +403,60 @@ class GalleryView(QWidget):
             )
         except OSError as exc:
             QMessageBox.critical(self, "Errore", f"Impossibile copiare nel dataset:\n{exc}")
+
+    def _on_add_to_technique_library(self) -> None:
+        """Aggiunge l'immagine selezionata alla Libreria Tecniche del progetto."""
+        if self._selected is None or self._project is None:
+            return
+
+        from src.core.guidance.technique_library import DEFAULT_SLOTS, TechniqueLibrary, TechniqueRef
+        import shutil
+        import uuid as _uuid
+
+        # Chiedi quale slot
+        slot_items = list(DEFAULT_SLOTS.keys())
+        slot_labels = [f"{k} — {v}" for k, v in DEFAULT_SLOTS.items()]
+        slot, ok = QInputDialog.getItem(
+            self, "Slot tecnica",
+            "In quale slot inserire il riferimento?",
+            slot_labels, editable=False,
+        )
+        if not ok:
+            return
+        slot_key = slot_items[slot_labels.index(slot)]
+
+        # Chiedi label
+        label, ok2 = QInputDialog.getText(
+            self, "Label riferimento",
+            "Nome breve per questo riferimento:",
+            text=self._selected.path.stem,
+        )
+        if not ok2:
+            return
+
+        # Copia immagine nella refs dir
+        refs_dir = self._project.techniques_refs_dir
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        ref_id = _uuid.uuid4().hex
+        src = self._selected.path
+        dest = refs_dir / f"{ref_id}{src.suffix}"
+        try:
+            shutil.copy2(src, dest)
+        except OSError as exc:
+            QMessageBox.critical(self, "Errore", f"Impossibile copiare il file:\n{exc}")
+            return
+
+        ref = TechniqueRef(slot=slot_key, image_path=dest, label=label.strip())
+        ref.ref_id = ref_id
+
+        lib = TechniqueLibrary.load(self._project.technique_library_path)
+        lib.add(ref)
+        lib.save(self._project.technique_library_path)
+
+        QMessageBox.information(
+            self, "Aggiunto alla Libreria Tecniche",
+            f"Riferimento «{label}» aggiunto allo slot «{slot_key}».",
+        )
 
     def _on_add_all_positive(self) -> None:
         """Copia nel dataset tutte le immagini 👍 visibili nella vista corrente."""
