@@ -117,6 +117,31 @@ class Project:
         return self.training_dir / "runs"
 
     @property
+    def guided_dir(self) -> Path:
+        """Sessioni di training guidato (human-in-the-loop)."""
+        return self.training_dir / "guided"
+
+    @property
+    def diary_path(self) -> Path:
+        """Decision Diary append-only (JSONL) condiviso tra le sessioni guidate."""
+        return self.guided_dir / "diary.jsonl"
+
+    @property
+    def techniques_dir(self) -> Path:
+        return self.root / "techniques"
+
+    @property
+    def techniques_refs_dir(self) -> Path:
+        return self.techniques_dir / "refs"
+
+    @property
+    def technique_library_path(self) -> Path:
+        return self.techniques_dir / "library.json"
+
+    def guided_session_dir(self, session_id: str) -> Path:
+        return self.guided_dir / session_id
+
+    @property
     def generations_dir(self) -> Path:
         return self.root / "generations"
 
@@ -220,10 +245,12 @@ class Project:
             project.dataset_processed_dir,
             project.dataset_thumbnails_dir,
             project.training_runs_dir,
+            project.guided_dir,
             project.generations_dir,
             project.gallery_dir,
             project.negatives_dir,
             project.prompts_dir,
+            project.techniques_refs_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
