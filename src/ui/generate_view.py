@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSlider,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -233,6 +234,8 @@ class GenerateView(QWidget):
         self._safety = None
         self._gpu_read_fn = None
         self._pending_per_image = 0.0
+        self._seed_locked = False
+        self._last_used_seed: Optional[int] = None
 
         self._build_ui()
         self._update_cost()
@@ -325,7 +328,7 @@ class GenerateView(QWidget):
         box = QGroupBox("Impostazioni")
         v = QVBoxLayout(box)
 
-        # Preset dimensioni
+        # --- Preset dimensioni (sempre visibili) ---
         v.addWidget(QLabel("Proporzioni"))
         preset_row = QHBoxLayout()
         self.preset_group = QButtonGroup(self)
@@ -362,7 +365,60 @@ class GenerateView(QWidget):
         wh.addWidget(self.height_spin)
         v.addLayout(wh)
 
-        # Sampler / scheduler
+        # Step (sempre visibile: il parametro più impattante)
+        steps_row = QHBoxLayout()
+        steps_row.addWidget(QLabel("Step:"))
+        self.steps_spin = QSpinBox()
+        self.steps_spin.setRange(1, 150)
+        self.steps_spin.setValue(30)
+        self.steps_spin.valueChanged.connect(self._update_cost)
+        steps_row.addWidget(self.steps_spin, 1)
+        v.addLayout(steps_row)
+
+        # Batch (sempre visibile)
+        batch_row = QHBoxLayout()
+        batch_row.addWidget(QLabel("Immagini:"))
+        self.batch_spin = QSpinBox()
+        self.batch_spin.setRange(1, 16)
+        self.batch_spin.setValue(1)
+        self.batch_spin.valueChanged.connect(self._update_cost)
+        batch_row.addWidget(self.batch_spin, 1)
+        v.addLayout(batch_row)
+
+        # Seed + lock (sempre visibili)
+        seed_row = QHBoxLayout()
+        seed_row.addWidget(QLabel("Seed:"))
+        self.seed_spin = QSpinBox()
+        self.seed_spin.setRange(-1, 2_147_483_647)
+        self.seed_spin.setValue(-1)
+        self.seed_spin.setToolTip("-1 = casuale ad ogni generazione")
+        seed_row.addWidget(self.seed_spin, 1)
+        self.seed_lock_btn = QToolButton()
+        self.seed_lock_btn.setText("🔓")
+        self.seed_lock_btn.setCheckable(True)
+        self.seed_lock_btn.setToolTip(
+            "Blocca il seed: riusa lo stesso seed ad ogni generazione.\n"
+            "Se il seed è -1, viene catturato automaticamente dopo la prima generazione."
+        )
+        self.seed_lock_btn.toggled.connect(self._on_seed_lock_toggled)
+        seed_row.addWidget(self.seed_lock_btn)
+        v.addLayout(seed_row)
+
+        # --- Toggle impostazioni avanzate ---
+        self.adv_toggle = QToolButton()
+        self.adv_toggle.setText("⚙  Avanzate ▸")
+        self.adv_toggle.setCheckable(True)
+        self.adv_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+        self.adv_toggle.setStyleSheet("QToolButton { border: none; color: #8a8d96; }")
+        self.adv_toggle.toggled.connect(self._on_adv_toggled)
+        v.addWidget(self.adv_toggle)
+
+        # Widget avanzato (nascosto di default)
+        self._adv_widget = QWidget()
+        adv = QVBoxLayout(self._adv_widget)
+        adv.setContentsMargins(0, 4, 0, 0)
+        adv.setSpacing(6)
+
         ss = QHBoxLayout()
         self.sampler_combo = QComboBox()
         self.sampler_combo.addItems(SAMPLERS)
@@ -373,19 +429,8 @@ class GenerateView(QWidget):
         ss.addWidget(QLabel("Sampler:"))
         ss.addWidget(self.sampler_combo, 1)
         ss.addWidget(self.scheduler_combo, 1)
-        v.addLayout(ss)
+        adv.addLayout(ss)
 
-        # Steps
-        steps_row = QHBoxLayout()
-        steps_row.addWidget(QLabel("Step:"))
-        self.steps_spin = QSpinBox()
-        self.steps_spin.setRange(1, 150)
-        self.steps_spin.setValue(30)
-        self.steps_spin.valueChanged.connect(self._update_cost)
-        steps_row.addWidget(self.steps_spin, 1)
-        v.addLayout(steps_row)
-
-        # CFG
         cfg_row = QHBoxLayout()
         cfg_row.addWidget(QLabel("CFG:"))
         self.cfg_spin = QDoubleSpinBox()
@@ -393,28 +438,15 @@ class GenerateView(QWidget):
         self.cfg_spin.setSingleStep(0.5)
         self.cfg_spin.setValue(7.0)
         cfg_row.addWidget(self.cfg_spin, 1)
-        v.addLayout(cfg_row)
+        adv.addLayout(cfg_row)
 
-        # Batch
-        batch_row = QHBoxLayout()
-        batch_row.addWidget(QLabel("Immagini:"))
-        self.batch_spin = QSpinBox()
-        self.batch_spin.setRange(1, 16)
-        self.batch_spin.setValue(1)
-        self.batch_spin.valueChanged.connect(self._update_cost)
-        batch_row.addWidget(self.batch_spin, 1)
-        v.addLayout(batch_row)
-
-        # Seed
-        seed_row = QHBoxLayout()
-        seed_row.addWidget(QLabel("Seed:"))
-        self.seed_spin = QSpinBox()
-        self.seed_spin.setRange(-1, 2_147_483_647)
-        self.seed_spin.setValue(-1)
-        self.seed_spin.setToolTip("-1 = casuale")
-        seed_row.addWidget(self.seed_spin, 1)
-        v.addLayout(seed_row)
+        self._adv_widget.setVisible(False)
+        v.addWidget(self._adv_widget)
         return box
+
+    def _on_adv_toggled(self, visible: bool) -> None:
+        self._adv_widget.setVisible(visible)
+        self.adv_toggle.setText("⚙  Avanzate ▾" if visible else "⚙  Avanzate ▸")
 
     def _build_upscaler_group(self) -> QGroupBox:
         box = QGroupBox("Upscaler")
@@ -460,9 +492,19 @@ class GenerateView(QWidget):
         self.cost_label.setStyleSheet("color: #d9a441;")
         v.addWidget(self.cost_label)
 
+        gen_row = QHBoxLayout()
         self.generate_btn = QPushButton("Genera")
         self.generate_btn.clicked.connect(self._on_generate)
-        v.addWidget(self.generate_btn)
+        gen_row.addWidget(self.generate_btn, 2)
+
+        self.variants_btn = QPushButton("Varianti ×4")
+        self.variants_btn.setToolTip(
+            "Genera 4 varianti con seed sequenziali (seed, seed+1, seed+2, seed+3).\n"
+            "Richiede un seed fissato — usa il pulsante 🔒 accanto al seed."
+        )
+        self.variants_btn.clicked.connect(self._on_generate_variants)
+        gen_row.addWidget(self.variants_btn, 1)
+        v.addLayout(gen_row)
 
         self.cancel_btn = QPushButton("Annulla")
         self.cancel_btn.setVisible(False)
@@ -615,6 +657,19 @@ class GenerateView(QWidget):
         if btn is not None:
             btn.setChecked(True)
 
+    def _on_seed_lock_toggled(self, locked: bool) -> None:
+        self._seed_locked = locked
+        if locked:
+            self.seed_lock_btn.setText("🔒")
+            # Se il seed è ancora -1 e abbiamo catturato un seed reale, usalo subito.
+            if self.seed_spin.value() == -1 and self._last_used_seed is not None:
+                self.seed_spin.setValue(self._last_used_seed)
+            self.seed_spin.setEnabled(False)
+        else:
+            self.seed_lock_btn.setText("🔓")
+            self.seed_spin.setEnabled(True)
+        self._update_generate_enabled()
+
     def _update_generate_enabled(self) -> None:
         running = self._worker is not None and self._worker.isRunning()
         ready = (
@@ -625,13 +680,31 @@ class GenerateView(QWidget):
             and not running
         )
         self.generate_btn.setEnabled(ready)
+        # Varianti: attive solo con seed fissato (>= 0) e non in corso
+        seed_fixed = self.seed_spin.value() >= 0
+        self.variants_btn.setEnabled(ready and seed_fixed)
 
     # --- generazione ----------------------------------------------------
 
-    def _on_generate(self) -> None:
+    def _on_generate_variants(self) -> None:
+        """Genera 4 varianti con seed sequenziali (seed, seed+1, seed+2, seed+3)."""
+        if self.seed_spin.value() < 0:
+            QMessageBox.information(
+                self, "Seed non fissato",
+                "Imposta un seed specifico e attiva il lucchetto 🔒 prima di\n"
+                "generare varianti.\n\n"
+                "Suggerimento: genera un'immagine, poi clicca 🔒 per catturare\n"
+                "il seed usato.",
+            )
+            return
+        self._on_generate(batch_override=4)
+
+    def _on_generate(self, batch_override: Optional[int] = None) -> None:
         if self._project is None or self._client is None or self._wallet is None:
             return
         form = self._collect_form()
+        if batch_override is not None:
+            form.batch = batch_override
         breakdown = form.estimate()
         if not self._wallet.can_afford(breakdown.total):
             QMessageBox.warning(
@@ -643,6 +716,7 @@ class GenerateView(QWidget):
             return
 
         self._pending_per_image = breakdown.per_image
+        self._last_used_seed = None  # reset: cattura il seed della nuova generazione
         self.gallery.clear()
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # indeterminato finché non arriva il primo step
@@ -686,6 +760,25 @@ class GenerateView(QWidget):
             except InsufficientCreditsError:
                 logger.warning("Saldo esaurito durante la generazione")
         self.gallery.add_image(path)
+
+        # Cattura il seed effettivo dal sidecar (serve per il lock).
+        # Viene fatto solo per la prima immagine di un batch (quella che
+        # stabilisce il seed base), così non sovrascriviamo con seed+1, seed+2 ecc.
+        if self._last_used_seed is None:
+            try:
+                from src.core.gallery import load_sidecar
+                sidecar = load_sidecar(path)
+                seed_used = sidecar.get("seed")
+                if isinstance(seed_used, int) and seed_used >= 0:
+                    self._last_used_seed = seed_used
+                    if self._seed_locked and self.seed_spin.value() == -1:
+                        # Lock attivo ma seed era -1: riempi con il seed reale.
+                        self.seed_spin.setEnabled(True)
+                        self.seed_spin.setValue(seed_used)
+                        self.seed_spin.setEnabled(False)
+                    self._update_generate_enabled()
+            except Exception:
+                pass  # Non fatale: la generazione non si blocca
 
     def _on_cooling(self, temp: int, resume: int) -> None:
         self.status_label.setText(

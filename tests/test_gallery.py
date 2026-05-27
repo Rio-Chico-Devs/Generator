@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from src.core.gallery import (
     RATING_VARIANT,
     REUSABLE_KEYS,
     GalleryItem,
+    add_to_dataset,
     load_gallery,
     load_sidecar,
     remove_item,
@@ -239,3 +241,67 @@ def test_load_gallery_no_filter_returns_all(tmp_path):
 def test_caption_includes_rating_label():
     it = GalleryItem(path=Path("x.png"), metadata={"positive": "p", "rating": RATING_KEEP})
     assert "Coerente" in it.caption()
+
+
+# ---------------------------------------------------------------------------
+# add_to_dataset
+# ---------------------------------------------------------------------------
+
+
+def test_add_to_dataset_copies_image(tmp_path):
+    src_dir = tmp_path / "gallery"
+    src_dir.mkdir()
+    dst_dir = tmp_path / "dataset"
+    img = _write_image(src_dir, "img.png", meta={"positive": "a red cat"})
+    it = load_gallery(src_dir)[0]
+    dest = add_to_dataset(it, dst_dir)
+    assert dest.exists()
+    assert dest.name == "img.png"
+    assert dest.parent == dst_dir
+
+
+def test_add_to_dataset_writes_caption(tmp_path):
+    src_dir = tmp_path / "gallery"
+    src_dir.mkdir()
+    dst_dir = tmp_path / "dataset"
+    img = _write_image(src_dir, "img.png", meta={"positive": "a red cat"})
+    it = load_gallery(src_dir)[0]
+    dest = add_to_dataset(it, dst_dir)
+    caption_file = dest.with_suffix(".txt")
+    assert caption_file.exists()
+    assert caption_file.read_text(encoding="utf-8") == "a red cat"
+
+
+def test_add_to_dataset_no_caption_when_no_prompt(tmp_path):
+    src_dir = tmp_path / "gallery"
+    src_dir.mkdir()
+    dst_dir = tmp_path / "dataset"
+    img = _write_image(src_dir, "img.png")
+    it = load_gallery(src_dir)[0]
+    dest = add_to_dataset(it, dst_dir)
+    assert not dest.with_suffix(".txt").exists()
+
+
+def test_add_to_dataset_deconflicts_name(tmp_path):
+    src_dir = tmp_path / "gallery"
+    src_dir.mkdir()
+    dst_dir = tmp_path / "dataset"
+    dst_dir.mkdir()
+    # pre-occupa il nome
+    (dst_dir / "img.png").write_bytes(b"existing")
+    img = _write_image(src_dir, "img.png", meta={"positive": "p"})
+    it = load_gallery(src_dir)[0]
+    dest = add_to_dataset(it, dst_dir)
+    assert dest.name == "img_2.png"
+    assert dest.exists()
+    assert (dst_dir / "img.png").read_bytes() == b"existing"  # originale intatto
+
+
+def test_add_to_dataset_creates_dst_dir(tmp_path):
+    src_dir = tmp_path / "gallery"
+    src_dir.mkdir()
+    dst_dir = tmp_path / "nonexistent" / "dataset"
+    img = _write_image(src_dir, "img.png")
+    it = load_gallery(src_dir)[0]
+    dest = add_to_dataset(it, dst_dir)
+    assert dest.exists()

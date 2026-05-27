@@ -222,3 +222,39 @@ def _fmt_dims(m: dict) -> str:
     if w and h:
         return f"{w}×{h}"
     return ""
+
+
+def add_to_dataset(item: GalleryItem, dataset_dir: Path) -> Path:
+    """Copia l'immagine nella cartella immagini del dataset e scrive il
+    file .txt caption (formato kohya/sd-scripts) se il prompt è disponibile.
+
+    Deconflicts automaticamente il nome se il file esiste già. Ritorna il
+    path di destinazione. Solleva OSError in caso di errore I/O."""
+    import shutil
+
+    dataset_dir = Path(dataset_dir)
+    dataset_dir.mkdir(parents=True, exist_ok=True)
+
+    dest = _unique_dataset_path(dataset_dir, item.path.name)
+    shutil.copy2(item.path, dest)
+
+    caption = item.prompt.strip()
+    if caption:
+        dest.with_suffix(".txt").write_text(caption, encoding="utf-8")
+
+    logger.info("Immagine aggiunta al dataset: %s → %s", item.path.name, dest)
+    return dest
+
+
+def _unique_dataset_path(directory: Path, name: str) -> Path:
+    """Ritorna un path non-conflittuale in directory per un file di nome name."""
+    dest = directory / name
+    if not dest.exists():
+        return dest
+    stem, suffix = Path(name).stem, Path(name).suffix
+    i = 2
+    while True:
+        candidate = directory / f"{stem}_{i}{suffix}"
+        if not candidate.exists():
+            return candidate
+        i += 1

@@ -43,6 +43,7 @@ from src.core.gallery import (
     RATING_UNTAGGED,
     RATING_VARIANT,
     GalleryItem,
+    add_to_dataset,
     load_gallery,
     remove_item,
     set_rating,
@@ -169,6 +170,14 @@ class GalleryView(QWidget):
         self._scroll.setWidget(self._inner)
         left.addWidget(self._scroll, 1)
 
+        # Azione bulk: aggiungi tutte le 👍 al dataset (visibile sotto la griglia)
+        self.add_all_btn = QPushButton("👍 → Dataset  (aggiungi tutte le coerenti)")
+        self.add_all_btn.setToolTip(
+            "Copia nel dataset tutte le immagini marcate 👍 visibili in questa vista"
+        )
+        self.add_all_btn.clicked.connect(self._on_add_all_positive)
+        left.addWidget(self.add_all_btn)
+
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
 
@@ -215,6 +224,13 @@ class GalleryView(QWidget):
         v.addLayout(rate_row)
 
         v.addWidget(_hline())
+
+        self.add_dataset_btn = QPushButton("→ Dataset")
+        self.add_dataset_btn.setToolTip(
+            "Copia questa immagine nel dataset del progetto per il training"
+        )
+        self.add_dataset_btn.clicked.connect(self._on_add_to_dataset)
+        v.addWidget(self.add_dataset_btn)
 
         self.reuse_btn = QPushButton("Usa questi parametri")
         self.reuse_btn.setToolTip(
@@ -299,6 +315,7 @@ class GalleryView(QWidget):
         self.reuse_btn.setEnabled(enabled)
         self.open_btn.setEnabled(enabled)
         self.delete_btn.setEnabled(enabled)
+        self.add_dataset_btn.setEnabled(enabled and self._project is not None)
         self.rate_keep.setEnabled(enabled)
         self.rate_variant.setEnabled(enabled)
         self.rate_reject.setEnabled(enabled)
@@ -333,6 +350,43 @@ class GalleryView(QWidget):
         else:
             # Con un filtro attivo l'item può uscire dalla vista: ricarica.
             self.refresh()
+
+    def _on_add_to_dataset(self) -> None:
+        """Copia l'immagine selezionata nel dataset del progetto attivo."""
+        if self._selected is None or self._project is None:
+            return
+        try:
+            dest = add_to_dataset(self._selected, self._project.dataset_images_dir)
+            QMessageBox.information(
+                self, "Aggiunta al dataset",
+                f"Immagine copiata nel dataset:\n{dest.name}",
+            )
+        except OSError as exc:
+            QMessageBox.critical(self, "Errore", f"Impossibile copiare nel dataset:\n{exc}")
+
+    def _on_add_all_positive(self) -> None:
+        """Copia nel dataset tutte le immagini 👍 visibili nella vista corrente."""
+        if self._project is None:
+            return
+        positive = [it for it in self._items if it.rating == RATING_KEEP]
+        if not positive:
+            QMessageBox.information(
+                self, "Nessuna immagine",
+                "Nessuna immagine marcata 👍 nella vista corrente.\n\n"
+                "Valuta prima le immagini con il pulsante 👍 Coerente.",
+            )
+            return
+        added, skipped = [], []
+        for item in positive:
+            try:
+                add_to_dataset(item, self._project.dataset_images_dir)
+                added.append(item.name)
+            except OSError:
+                skipped.append(item.name)
+        msg = f"{len(added)} immagini aggiunte al dataset."
+        if skipped:
+            msg += f"\n{len(skipped)} non copiabili (vedi log)."
+        QMessageBox.information(self, "Dataset aggiornato", msg)
 
     def _on_reuse(self) -> None:
         if self._selected is None:
