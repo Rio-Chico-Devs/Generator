@@ -8,7 +8,7 @@ import json
 import logging
 import re
 import shutil
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -64,6 +64,8 @@ class Project:
     base_model: Optional[BaseModelRef] = None
     activator_tag: str = ""
     trigger_prompt_prefix: str = ""
+    # Slug del progetto genitore se questo è una variante (fork). Vuoto = radice.
+    parent_slug: str = ""
     default_negative_prompt: str = (
         "low quality, worst quality, blurry, deformed, bad anatomy"
     )
@@ -157,6 +159,7 @@ class Project:
             base_model=BaseModelRef(**bm) if bm else None,
             activator_tag=data.get("activator_tag", ""),
             trigger_prompt_prefix=data.get("trigger_prompt_prefix", ""),
+            parent_slug=data.get("parent_slug", ""),
             default_negative_prompt=data.get("default_negative_prompt", ""),
             default_generation_params=GenerationDefaults(**params),
             active_lora=ActiveLora(**al) if al else None,
@@ -233,6 +236,28 @@ class Project:
         project.save()
         logger.info("Project created: %s (slug=%s)", name, project.slug)
         return project
+
+    def fork(self, name: str, description: str = "") -> Project:
+        """Crea un progetto variante che eredita da questo lo stile e i parametri.
+
+        Il figlio nasce vuoto (dataset da popolare con le immagini 🔀 scelte) ma
+        eredita: modello base, prompt negativo di default, parametri di
+        generazione e il LoRA attivo come punto di partenza. Registra la
+        discendenza in ``parent_slug``. Vive nella stessa cartella progetti del
+        genitore."""
+        child = Project.create(
+            name=name,
+            description=description or f"Variante di {self.name}",
+            base_model=self.base_model,
+            parent_dir=self.root.parent,
+        )
+        child.parent_slug = self.slug
+        child.default_negative_prompt = self.default_negative_prompt
+        child.default_generation_params = replace(self.default_generation_params)
+        child.active_lora = replace(self.active_lora) if self.active_lora else None
+        child.save()
+        logger.info("Fork progetto: %s → %s", self.slug, child.slug)
+        return child
 
     @classmethod
     def load(cls, root: Path) -> Project:

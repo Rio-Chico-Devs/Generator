@@ -217,6 +217,7 @@ class MainWindow(QMainWindow):
                 from src.ui.gallery_view import GalleryView
                 v = GalleryView()
                 v.reuse_requested.connect(self._on_reuse_params)
+                v.projects_changed.connect(self._refresh_projects_list)
                 self._gallery_view = v
             else:
                 v = _PlaceholderView(name)

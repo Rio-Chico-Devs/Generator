@@ -404,6 +404,15 @@ class GenerateView(QWidget):
         seed_row.addWidget(self.seed_lock_btn)
         v.addLayout(seed_row)
 
+        seed_help = QLabel(
+            "Il seed è il \"punto di partenza\" casuale dell'immagine. "
+            "Bloccalo con 🔒 per ritrovare lo stesso risultato, poi usa "
+            "«Varianti ×4» per esplorare piccole variazioni della stessa idea."
+        )
+        seed_help.setWordWrap(True)
+        seed_help.setStyleSheet("color: #8a8d96; font-size: 10px;")
+        v.addWidget(seed_help)
+
         # --- Toggle impostazioni avanzate ---
         self.adv_toggle = QToolButton()
         self.adv_toggle.setText("⚙  Avanzate ▸")

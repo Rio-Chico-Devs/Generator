@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMessageBox,
@@ -122,6 +123,9 @@ class GalleryView(QWidget):
     # Emesso con i parametri riusabili dell'immagine selezionata, così
     # MainWindow può pre-compilare la GenerateView.
     reuse_requested = pyqtSignal(dict)
+    # Emesso dopo la creazione di un progetto variante (fork), così MainWindow
+    # può ricaricare la lista progetti nella sidebar.
+    projects_changed = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -170,13 +174,25 @@ class GalleryView(QWidget):
         self._scroll.setWidget(self._inner)
         left.addWidget(self._scroll, 1)
 
-        # Azione bulk: aggiungi tutte le 👍 al dataset (visibile sotto la griglia)
-        self.add_all_btn = QPushButton("👍 → Dataset  (aggiungi tutte le coerenti)")
+        # Azioni bulk sotto la griglia: alimentano il loop di apprendimento.
+        bulk = QHBoxLayout()
+        self.add_all_btn = QPushButton("👍 → Dataset")
         self.add_all_btn.setToolTip(
-            "Copia nel dataset tutte le immagini marcate 👍 visibili in questa vista"
+            "Copia nel dataset tutte le immagini marcate 👍 visibili in questa vista,\n"
+            "pronte per il prossimo addestramento dello stile."
         )
         self.add_all_btn.clicked.connect(self._on_add_all_positive)
-        left.addWidget(self.add_all_btn)
+        bulk.addWidget(self.add_all_btn)
+
+        self.fork_btn = QPushButton("🔀 Crea progetto variante")
+        self.fork_btn.setToolTip(
+            "Crea un nuovo progetto che parte dallo stile attuale, usando le\n"
+            "immagini 🔀 come dataset iniziale. Serve a specializzare una\n"
+            "direzione diversa senza toccare il progetto originale."
+        )
+        self.fork_btn.clicked.connect(self._on_fork_variant)
+        bulk.addWidget(self.fork_btn)
+        left.addLayout(bulk)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
@@ -262,6 +278,9 @@ class GalleryView(QWidget):
         self._selected = None
         self.detail.setPlainText("")
         self._set_actions_enabled(False)
+        has_project = self._project is not None
+        self.add_all_btn.setEnabled(has_project)
+        self.fork_btn.setEnabled(has_project)
 
         if self._project is None:
             self._items = []
@@ -387,6 +406,45 @@ class GalleryView(QWidget):
         if skipped:
             msg += f"\n{len(skipped)} non copiabili (vedi log)."
         QMessageBox.information(self, "Dataset aggiornato", msg)
+
+    def _on_fork_variant(self) -> None:
+        """Crea un progetto variante seminato con le immagini 🔀 della vista."""
+        if self._project is None:
+            return
+        variants = [it for it in self._items if it.rating == RATING_VARIANT]
+        if not variants:
+            QMessageBox.information(
+                self, "Nessuna variante",
+                "Nessuna immagine marcata 🔀 nella vista corrente.\n\n"
+                "Marca con 🔀 le immagini che ti piacciono come direzione diversa,\n"
+                "poi crea un progetto variante da quelle.",
+            )
+            return
+        name, ok = QInputDialog.getText(
+            self, "Nuovo progetto variante",
+            f"Crea una variante di '{self._project.name}' partendo da "
+            f"{len(variants)} immagini 🔀.\n\nNome del nuovo progetto:",
+        )
+        if not ok or not name.strip():
+            return
+        try:
+            child = self._project.fork(name.strip())
+        except Exception as exc:
+            QMessageBox.critical(self, "Errore", f"Creazione variante fallita:\n{exc}")
+            return
+        seeded = 0
+        for item in variants:
+            try:
+                add_to_dataset(item, child.dataset_images_dir)
+                seeded += 1
+            except OSError:
+                pass
+        QMessageBox.information(
+            self, "Variante creata",
+            f"Progetto '{child.name}' creato con {seeded} immagini nel dataset.\n\n"
+            "Aprilo dalla barra laterale per addestrarne lo stile.",
+        )
+        self.projects_changed.emit()
 
     def _on_reuse(self) -> None:
         if self._selected is None:
