@@ -45,7 +45,10 @@ def pytest_configure(config):
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
-    """Scrive summary.json e latest.log dopo ogni run completo."""
+    """Scrive summary.json e latest.log dopo ogni run completo.
+
+    Tutto deriva dai report già raccolti da pytest: nessun subprocess,
+    nessun re-run (eviterebbe ricorsione infinita)."""
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
     stats = terminalreporter.stats
@@ -79,9 +82,7 @@ def pytest_terminal_summary(terminalreporter, exitstatus, config):
     summary_path = _RESULTS_DIR / "summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
 
-    # Log verboso: rilancia la sessione con --tb=long in un subprocess
-    # per catturare il testo completo senza interferire con l'output corrente.
-    _write_verbose_log(config)
+    _write_verbose_log(passed, failed, errored, skipped, exitstatus)
 
 
 def _extract_message(report) -> str:
@@ -102,19 +103,36 @@ def _slowest(reports, n: int = 10) -> list[dict]:
     return [{"nodeid": nid, "duration_s": round(d, 3)} for nid, d in timed[:n]]
 
 
-def _write_verbose_log(config) -> None:
-    """Cattura un re-run --co -q --tb=long in latest.log (best-effort)."""
-    import subprocess, sys  # noqa: E401
+def _write_verbose_log(passed, failed, errored, skipped, exitstatus) -> None:
+    """Scrive latest.log: esito per test + traceback completo dei fallimenti.
+
+    Costruito dai report già in memoria — niente subprocess né ricorsione."""
+    lines: list[str] = []
+    status = "GREEN" if exitstatus == 0 else "RED"
+    lines.append(f"=== Vihente Forge — Test Run [{status}] ===")
+    lines.append(
+        f"passed={len(passed)} failed={len(failed)} "
+        f"errored={len(errored)} skipped={len(skipped)}"
+    )
+    lines.append("")
+
+    lines.append("--- Esiti ---")
+    for r in passed:
+        lines.append(f"PASS  {r.nodeid}")
+    for r in skipped:
+        lines.append(f"SKIP  {r.nodeid}")
+    for r in failed:
+        lines.append(f"FAIL  {r.nodeid}")
+    for r in errored:
+        lines.append(f"ERROR {r.nodeid}")
+
+    if failed or errored:
+        lines.append("")
+        lines.append("--- Dettaglio fallimenti ---")
+        for r in failed + errored:
+            lines.append("")
+            lines.append(f"### {r.nodeid}")
+            lines.append(_extract_message(r) or "(nessun traceback disponibile)")
+
     log_path = _RESULTS_DIR / "latest.log"
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest", "--tb=long", "-v",
-             "--ignore=tests/test_recipe_worker.py",
-             "--no-header", "--no-cov"],
-            capture_output=True, text=True,
-            cwd=str(Path(__file__).parent.parent),
-            timeout=120,
-        )
-        log_path.write_text(result.stdout + result.stderr, encoding="utf-8")
-    except Exception as exc:
-        log_path.write_text(f"Log non disponibile: {exc}\n", encoding="utf-8")
+    log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

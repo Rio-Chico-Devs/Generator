@@ -27,7 +27,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
-    QSizePolicy,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -78,7 +77,7 @@ class _CandidateThumb(QFrame):
         self._img_label.setStyleSheet("font-size: 24px; color: #777;")
         layout.addWidget(self._img_label)
 
-        self._approve_btn = QPushButton(f"✓  Approva")
+        self._approve_btn = QPushButton("✓  Approva")
         self._approve_btn.setEnabled(False)
         self._approve_btn.clicked.connect(lambda: self.approved.emit(self._index))
         layout.addWidget(self._approve_btn)
@@ -456,6 +455,7 @@ class GuidedTrainingView(QWidget):
         self._worker = None
         self._pending_candidates: list[Candidate] = []
         self._n_candidates = 4  # da step_def, aggiornato ad ogni step
+        self._step_attempt = 0  # quante volte lo step corrente è stato (ri)generato
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -525,13 +525,21 @@ class GuidedTrainingView(QWidget):
 
     # --- Step pipeline ---------------------------------------------------
 
-    def _launch_step(self) -> None:
-        """Avvia il worker per lo step corrente."""
+    def _launch_step(self, *, new_step: bool = True) -> None:
+        """Avvia il worker per lo step corrente.
+
+        new_step=True azzera il contatore tentativi (si entra in uno step
+        nuovo); False lo incrementa (rigenerazione dello stesso step)."""
         if self._session is None or self._project is None:
             return
         step_def = self._session.current_step_def
         if step_def is None:
             return
+
+        if new_step:
+            self._step_attempt = 0
+        else:
+            self._step_attempt += 1
 
         total = len(self._session.pipeline)
         current = self._session.current_step_index + 1
@@ -541,7 +549,10 @@ class GuidedTrainingView(QWidget):
         self._n_candidates = step_def.n_candidates
 
         session_dir = self._project.guided_session_dir(self._session.session_id)
-        step_dir = session_dir / f"step_{self._session.current_step_index:02d}"
+        step_name = f"step_{self._session.current_step_index:02d}"
+        if self._step_attempt > 0:
+            step_name += f"_r{self._step_attempt}"
+        step_dir = session_dir / step_name
 
         from src.workers.guided_worker import GuidedWorker
         self._worker = GuidedWorker(
@@ -550,6 +561,7 @@ class GuidedTrainingView(QWidget):
             client=self._comfy_client,
             step_dir=step_dir,
             technique_library=self._library,
+            attempt=self._step_attempt,
         )
         self._worker.candidate_ready.connect(self._on_candidate_ready)
         self._worker.step_complete.connect(self._on_step_complete)
@@ -643,8 +655,8 @@ class GuidedTrainingView(QWidget):
             self._show_exhausted_dialog(report)
             return
 
-        # Riparte lo stesso step
-        self._launch_step()
+        # Riparte lo stesso step con seed diversi (tentativo successivo)
+        self._launch_step(new_step=False)
 
     def _show_exhausted_dialog(self, report) -> None:
         dlg = _ExhaustedDialog(

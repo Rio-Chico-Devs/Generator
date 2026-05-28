@@ -20,7 +20,7 @@ import logging
 import shutil
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -106,6 +106,7 @@ class GuidedWorker(QThread):
         step_dir: Path,
         comfy_input_dir: Optional[Path] = None,
         technique_library: Optional[TechniqueLibrary] = None,
+        attempt: int = 0,
         safety: Optional[SafetyConfig] = None,
         gpu_read_fn: Optional[Callable[[], Any]] = None,
         parent=None,
@@ -117,6 +118,9 @@ class GuidedWorker(QThread):
         self._step_dir = step_dir
         self._comfy_input_dir = comfy_input_dir
         self._library = technique_library
+        # Tentativo dello step (0 = primo, >0 = dopo "Rigenera tutti"): sposta
+        # i seed così che ogni rigenerazione esplori candidati diversi.
+        self._attempt = attempt
         self._safety = safety or SafetyConfig()
         if gpu_read_fn is not None:
             self._governor = ThermalGovernor(self._safety, read_fn=gpu_read_fn)
@@ -177,7 +181,12 @@ class GuidedWorker(QThread):
                     return
                 break
 
-            seed_i = resolve_seed(self._session.seed + i)
+            if self._session.seed < 0:
+                seed_i = resolve_seed(-1)  # sessione a seed casuale: ogni candidato random
+            else:
+                # Deterministico: l'offset per tentativo evita candidati identici
+                # tra una rigenerazione e l'altra dello stesso step.
+                seed_i = self._session.seed + self._attempt * 10_000 + i
             wf.set_seed(seed_i)
 
             prompt_id = self._client.submit(wf.build())
@@ -198,11 +207,12 @@ class GuidedWorker(QThread):
                 if src.resolve() != dest.resolve():
                     shutil.copy2(src, dest)
 
-                record_i = CandidateRecord(
-                    **{k: v for k, v in record_base.__dict__.items()},
+                record_i = replace(
+                    record_base,
+                    candidate_index=i,
+                    seed=seed_i,
+                    technique_refs=list(record_base.technique_refs),
                 )
-                record_i.candidate_index = i
-                record_i.seed = seed_i
                 _write_candidate_sidecar(dest, record_i)
 
                 sidecar_path = dest.with_suffix(".json")
