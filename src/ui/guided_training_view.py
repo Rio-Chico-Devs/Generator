@@ -48,6 +48,7 @@ logger = logging.getLogger(__name__)
 
 # Altezza miniatura in px
 _THUMB_H = 220
+_MAX_PROMPT_LEN = 500
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +261,14 @@ class _StartPane(QWidget):
     def _on_start(self) -> None:
         prompt = self._prompt_edit.toPlainText().strip()
         if not prompt:
+            return
+        if len(prompt) > _MAX_PROMPT_LEN:
+            QMessageBox.warning(
+                self,
+                "Prompt troppo lungo",
+                f"Il prompt supera {_MAX_PROMPT_LEN} caratteri ({len(prompt)}).\n"
+                "Accorcialo prima di continuare.",
+            )
             return
         self.started.emit(prompt, self._seed_spin.value())
 
@@ -480,6 +489,11 @@ class GuidedTrainingView(QWidget):
         self._done_pane.new_session.connect(self._reset_to_start)
 
     def set_project(self, project: Optional[Project]) -> None:
+        if project is not self._project:
+            self._stop_worker()
+            if self._session is not None:
+                self._session = None
+                self._stack.setCurrentIndex(self._PANE_START)
         self._project = project
         self._start_pane.set_project(project)
         if project:
@@ -555,6 +569,7 @@ class GuidedTrainingView(QWidget):
         step_dir = session_dir / step_name
 
         from src.workers.guided_worker import GuidedWorker
+        self._stop_worker()  # ferma eventuale worker precedente prima di crearne uno nuovo
         self._worker = GuidedWorker(
             session=self._session,
             project=self._project,
@@ -692,8 +707,6 @@ class GuidedTrainingView(QWidget):
             self._on_approved(idx)
 
     def _on_abort(self) -> None:
-        if self._worker and self._worker.isRunning():
-            self._worker.abort()
         if self._session is not None and self._project is not None:
             from src.core.guidance.session import STATUS_ABORTED
             self._session.status = STATUS_ABORTED
@@ -712,10 +725,26 @@ class GuidedTrainingView(QWidget):
             return []
         return [r.ref_id for r in self._library.active_for_step(step_def)]
 
+    def _stop_worker(self) -> None:
+        """Ferma il worker corrente, disconnette i segnali e aspetta la terminazione."""
+        if self._worker is None:
+            return
+        w = self._worker
+        self._worker = None
+        # Disconnetti prima di fermare: evita che segnali in coda aggiornino
+        # la UI dopo il reset.
+        try:
+            w.candidate_ready.disconnect()
+            w.step_complete.disconnect()
+            w.error.disconnect()
+        except RuntimeError:
+            pass
+        w.stop()
+
     def _reset_to_start(self) -> None:
+        self._stop_worker()
         self._session = None
         self._pending_candidates = []
-        self._worker = None
         self._stack.setCurrentIndex(self._PANE_START)
 
 

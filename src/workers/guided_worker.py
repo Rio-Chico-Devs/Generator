@@ -134,6 +134,20 @@ class GuidedWorker(QThread):
             self._client.interrupt()
         except Exception as exc:
             logger.warning("interrupt() fallito: %s", exc)
+        try:
+            self._client.clear_queue()
+        except Exception as exc:
+            logger.warning("clear_queue() fallito: %s", exc)
+
+    def stop(self, timeout_ms: int = 5000) -> None:
+        """Interrompe il worker e attende la sua terminazione (max timeout_ms)."""
+        if not self.isRunning():
+            return
+        self.abort()
+        if not self.wait(timeout_ms):
+            logger.warning("GuidedWorker non terminato in %dms — terminate()", timeout_ms)
+            self.terminate()
+            self.wait(1000)
 
     def run(self) -> None:
         try:
@@ -186,7 +200,8 @@ class GuidedWorker(QThread):
             else:
                 # Deterministico: l'offset per tentativo evita candidati identici
                 # tra una rigenerazione e l'altra dello stesso step.
-                seed_i = self._session.seed + self._attempt * 10_000 + i
+                # Modulo 2^32 per restare nel range valido per i sampler.
+                seed_i = (self._session.seed + self._attempt * 10_000 + i) % (2**32)
             wf.set_seed(seed_i)
 
             prompt_id = self._client.submit(wf.build())

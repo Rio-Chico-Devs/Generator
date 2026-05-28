@@ -84,6 +84,7 @@ class ComfyClientProtocol(Protocol):
         self, prompt_id: str, progress_callback: Optional[Callable[[int, int], None]]
     ) -> list[Path]: ...
     def interrupt(self) -> None: ...
+    def clear_queue(self) -> None: ...
     def get_vram_usage(self) -> dict: ...
 
 
@@ -249,6 +250,21 @@ class ComfyClient:
         req = urllib.request.Request(f"{self._base}/interrupt", data=b"")
         urllib.request.urlopen(req, timeout=10)
 
+    def clear_queue(self) -> None:
+        """Svuota la coda pending di ComfyUI (POST /queue {"clear": true})."""
+        import urllib.request
+
+        payload = json.dumps({"clear": True}).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base}/queue",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urllib.request.urlopen(req, timeout=10)
+        except Exception as exc:
+            logger.warning("clear_queue() HTTP error: %s", exc)
+
     def get_vram_usage(self) -> dict:
         """GET /system_stats per la status bar. Ritorna {} se irraggiungibile."""
         import urllib.error
@@ -320,6 +336,9 @@ class MockComfyClient:
         return [self._make_placeholder(prompt_id)]
 
     def interrupt(self) -> None:
+        pass
+
+    def clear_queue(self) -> None:
         pass
 
     def get_vram_usage(self) -> dict:
