@@ -485,6 +485,8 @@ class GuidedTrainingView(QWidget):
         self._worker = None
         self._comfy_client = None
         self._comfy_input_dir: Optional[Path] = None
+        self._safety = None          # SafetyConfig: freno termico (None = default worker)
+        self._gpu_read_fn = None     # lettura GPU iniettabile (mock/test)
         self._pending_candidates: list[Candidate] = []
         self._n_candidates = 4  # da step_def, aggiornato ad ogni step
         self._step_attempt = 0  # quante volte lo step corrente è stato (ri)generato
@@ -532,6 +534,12 @@ class GuidedTrainingView(QWidget):
         approvata dello step precedente. Senza questa, gli step 2+ non
         possono fare img2img."""
         self._comfy_input_dir = Path(input_dir) if input_dir else None
+
+    def set_safety(self, safety, gpu_read_fn=None) -> None:
+        """Configura il freno termico (come GenerateView). In mock va passato
+        SafetyConfig(enabled=False) per evitare le pause da 8s tra i candidati."""
+        self._safety = safety
+        self._gpu_read_fn = gpu_read_fn
 
     # --- Avvio sessione --------------------------------------------------
 
@@ -607,10 +615,14 @@ class GuidedTrainingView(QWidget):
             comfy_input_dir=self._comfy_input_dir,
             technique_library=self._library,
             attempt=self._step_attempt,
+            safety=self._safety,
+            gpu_read_fn=self._gpu_read_fn,
         )
         self._worker.candidate_ready.connect(self._on_candidate_ready)
         self._worker.candidate_warning.connect(self._on_candidate_warning)
         self._worker.step_complete.connect(self._on_step_complete)
+        self._worker.progress.connect(self._on_progress)
+        self._worker.cooling.connect(self._on_cooling)
         self._worker.error.connect(self._on_worker_error)
         self._worker.start()
 
@@ -622,6 +634,17 @@ class GuidedTrainingView(QWidget):
 
     def _on_candidate_warning(self, index: int, text: str) -> None:
         self._step_pane.warn_candidate(index, text)
+
+    def _on_progress(self, step: int, total: int) -> None:
+        # Feedback durante la diffusione del candidato corrente.
+        if total > 0:
+            self._step_pane.set_status(f"Diffusione… {step}/{total}")
+
+    def _on_cooling(self, temp: int, resume: int) -> None:
+        # Feedback durante il freno termico: senza, l'attesa sembra un freeze.
+        self._step_pane.set_status(
+            f"GPU calda ({temp}°C): attendo che scenda sotto {resume}°C…"
+        )
 
     def _on_step_complete(self, candidates: list[Candidate]) -> None:
         self._pending_candidates = candidates
@@ -781,6 +804,8 @@ class GuidedTrainingView(QWidget):
             w.candidate_ready.disconnect()
             w.candidate_warning.disconnect()
             w.step_complete.disconnect()
+            w.progress.disconnect()
+            w.cooling.disconnect()
             w.error.disconnect()
         except RuntimeError:
             pass

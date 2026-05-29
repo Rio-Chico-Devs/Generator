@@ -229,6 +229,12 @@ class MainWindow(QMainWindow):
                 v.session_saved_to_gallery.connect(self._on_guided_save_to_gallery)
                 v.switch_to_dataset.connect(lambda: self._switch_view("Dataset"))
                 v.switch_to_technique_library.connect(lambda: self._switch_view("Tecniche"))
+                if self.mock:
+                    # Mock: niente freno termico → nessuna pausa da 8s tra candidati
+                    from src.utils.gpu_monitor import SafetyConfig
+                    v.set_safety(SafetyConfig(enabled=False), None)
+                else:
+                    v.set_safety(self._app_config.thermal_safety(), None)
                 self._guided_view = v
             elif name == "Tecniche":
                 from src.ui.technique_library_view import TechniqueLibraryView
