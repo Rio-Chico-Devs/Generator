@@ -493,6 +493,15 @@ class MainWindow(QMainWindow):
             except Exception as exc:
                 logger.warning("Salvataggio wallet fallito: %s", exc)
 
+        # Ferma il worker della sessione guidata PRIMA di spegnere ComfyUI:
+        # interrupt/clear_queue hanno bisogno del server ancora vivo.
+        guided = getattr(self, "_guided_view", None)
+        if guided is not None:
+            try:
+                guided.shutdown()
+            except Exception as exc:
+                logger.warning("Shutdown vista guidata fallito: %s", exc)
+
         poller = getattr(self, "_gpu_poller", None)
         if poller is not None:
             poller.stop()

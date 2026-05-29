@@ -627,6 +627,11 @@ class GuidedTrainingView(QWidget):
         rejected = [c for c in self._pending_candidates if c.index != index]
         step_def = self._session.current_step_def
 
+        # Seed REALE del candidato scelto (letto dal sidecar): con l'offset
+        # per-candidato/tentativo differisce da session.seed, e serve per
+        # riprodurre esattamente l'immagine in futuro (DPO / re-roll).
+        chosen_seed = _seed_from_sidecar(chosen) if chosen else self._session.seed
+
         # Scrivi nel Diary
         entry = DiaryEntry(
             session_id=self._session.session_id,
@@ -634,7 +639,7 @@ class GuidedTrainingView(QWidget):
             step_id=step_def.id,
             prompt=self._session.prompt,
             negative_prompt=self._session.negative_prompt,
-            seed=self._session.seed,
+            seed=chosen_seed,
             chosen_path=chosen.image_path if chosen else None,
             rejected_paths=[c.image_path for c in rejected],
             technique_refs_used=self._active_ref_ids(step_def),
@@ -750,6 +755,11 @@ class GuidedTrainingView(QWidget):
             return []
         return [r.ref_id for r in self._library.active_for_step(step_def)]
 
+    def shutdown(self) -> None:
+        """Ferma il worker in corso. Chiamato dalla finestra principale alla
+        chiusura per non lasciare thread orfani."""
+        self._stop_worker()
+
     def _stop_worker(self) -> None:
         """Ferma il worker corrente, disconnette i segnali e aspetta la terminazione."""
         if self._worker is None:
@@ -784,3 +794,18 @@ def _hline() -> QFrame:
     line.setFrameShape(QFrame.Shape.HLine)
     line.setStyleSheet("color: #444;")
     return line
+
+
+def _seed_from_sidecar(candidate) -> int:
+    """Legge il seed reale dal sidecar JSON del candidato.
+
+    Fallback a -1 se il sidecar manca o non contiene il seed."""
+    sc = getattr(candidate, "sidecar_path", None)
+    if not sc or not Path(sc).exists():
+        return -1
+    try:
+        import json
+        data = json.loads(Path(sc).read_text(encoding="utf-8"))
+        return int(data.get("seed", -1))
+    except (OSError, ValueError, TypeError):
+        return -1
