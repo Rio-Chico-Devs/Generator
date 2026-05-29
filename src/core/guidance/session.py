@@ -19,6 +19,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.utils.atomic import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 SCHEMA_VERSION = 1
@@ -75,6 +77,7 @@ class Candidate:
     sidecar_path: Optional[Path] = None
     latent_path: Optional[Path] = None  # v2: latent puro; v1 usa img2img su PNG
     is_approved: Optional[bool] = None
+    warning: Optional[str] = None  # impostato dal pre-screening se l'immagine è sospetta
 
     def to_dict(self) -> dict:
         return {
@@ -83,6 +86,7 @@ class Candidate:
             "sidecar_path": str(self.sidecar_path) if self.sidecar_path else None,
             "latent_path": str(self.latent_path) if self.latent_path else None,
             "is_approved": self.is_approved,
+            "warning": self.warning,
         }
 
     @classmethod
@@ -93,6 +97,7 @@ class Candidate:
             sidecar_path=Path(d["sidecar_path"]) if d.get("sidecar_path") else None,
             latent_path=Path(d["latent_path"]) if d.get("latent_path") else None,
             is_approved=d.get("is_approved"),
+            warning=d.get("warning"),
         )
 
 
@@ -238,10 +243,9 @@ class GuidedSession:
 
     def save(self, path: Path) -> None:
         path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        atomic_write_text(
+            path,
             json.dumps(self.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
         )
         logger.debug("GuidedSession salvata: %s", path)
 

@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from src.core.guidance.session import StepDefinition
+from src.utils.atomic import atomic_write_text
 
 logger = logging.getLogger(__name__)
 
@@ -124,10 +125,9 @@ class TechniqueLibrary:
 
     def save(self, path: Path) -> None:
         path = Path(path)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
+        atomic_write_text(
+            path,
             json.dumps(self.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
         )
         logger.debug("TechniqueLibrary salvata: %s (%d ref)", path, len(self.refs))
 

@@ -92,11 +92,12 @@ class GuidedWorker(QThread):
     dell'utente, poi crea un nuovo GuidedWorker per lo step successivo.
     """
 
-    candidate_ready = pyqtSignal(int, Path)  # (candidate_index, image_path)
-    step_complete   = pyqtSignal(list)       # list[Candidate]
-    progress        = pyqtSignal(int, int)   # diffusion step corrente, totale
-    cooling         = pyqtSignal(int, int)   # temp_gpu, target_temp
-    error           = pyqtSignal(str)
+    candidate_ready   = pyqtSignal(int, Path)  # (candidate_index, image_path)
+    candidate_warning = pyqtSignal(int, str)   # (candidate_index, motivo) — immagine sospetta
+    step_complete     = pyqtSignal(list)       # list[Candidate]
+    progress          = pyqtSignal(int, int)   # diffusion step corrente, totale
+    cooling           = pyqtSignal(int, int)   # temp_gpu, target_temp
+    error             = pyqtSignal(str)
 
     def __init__(
         self,
@@ -167,6 +168,17 @@ class GuidedWorker(QThread):
         input_image = self._session.step_input_image()
         is_img2img = input_image is not None and step_def.denoise_strength < 1.0
 
+        # Ghost input: lo step 2+ richiede l'immagine approvata dello step
+        # precedente. Se è sparita dal disco (cancellata a mano, sessione
+        # ripristinata male), fermati con un messaggio chiaro invece di lasciare
+        # che ComfyUI fallisca con un errore criptico.
+        if is_img2img and not Path(input_image).exists():
+            self.error.emit(
+                f"Immagine di input dello step precedente non trovata:\n{input_image}\n"
+                "La sessione non è ripristinabile da questo punto — ricomincia da capo."
+            )
+            return
+
         wf = self._load_workflow(is_img2img)
         self._step_dir.mkdir(parents=True, exist_ok=True)
 
@@ -230,14 +242,23 @@ class GuidedWorker(QThread):
                 )
                 _write_candidate_sidecar(dest, record_i)
 
+                # Pre-screening: scarta in anticipo immagini nere/corrotte così
+                # l'utente non approva per sbaglio un input degenere per lo step
+                # successivo.
+                warning = _validate_candidate_image(dest)
+
                 sidecar_path = dest.with_suffix(".json")
                 c = Candidate(
                     index=i,
                     image_path=dest,
                     sidecar_path=sidecar_path,
+                    warning=warning,
                 )
                 candidates.append(c)
                 self.candidate_ready.emit(i, dest)
+                if warning:
+                    logger.warning("Candidato %d sospetto: %s", i, warning)
+                    self.candidate_warning.emit(i, warning)
                 break  # una immagine per candidato
 
             # Piccolo cooldown tra candidati (no freno termico, solo pausa)
@@ -403,6 +424,49 @@ def _write_candidate_sidecar(image_path: Path, record: CandidateRecord) -> None:
         )
     except OSError as exc:
         logger.warning("Sidecar candidato non scritto: %s", exc)
+
+
+_MIN_IMAGE_BYTES = 1024
+_MIN_IMAGE_DIM = 64
+
+
+def _validate_candidate_image(path: Path) -> Optional[str]:
+    """Controlla un PNG appena generato. Ritorna un motivo se sospetto, altrimenti None.
+
+    Rileva i fallimenti silenziosi più comuni:
+    - file vuoto/minuscolo  → generazione abortita;
+    - PNG illeggibile       → output corrotto;
+    - dimensioni degeneri   → es. 16×16, generazione fallita parzialmente;
+    - immagine a tinta unita → tipico output nero da OOM/NaN nel sampler.
+    """
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return "file non accessibile"
+    if size < _MIN_IMAGE_BYTES:
+        return f"file troppo piccolo ({size} byte) — probabilmente vuoto"
+
+    try:
+        from PIL import Image
+    except ImportError:
+        # Pillow assente: non possiamo fare il controllo profondo, ma non è un
+        # difetto del candidato → niente warning (evita falsi positivi a raffica).
+        logger.debug("Pillow non disponibile: pre-screening immagine saltato")
+        return None
+
+    try:
+        with Image.open(path) as img:
+            img.load()
+            w, h = img.size
+            if w < _MIN_IMAGE_DIM or h < _MIN_IMAGE_DIM:
+                return f"dimensioni degeneri ({w}×{h})"
+            extrema = img.convert("RGB").getextrema()
+            if all(lo == hi for lo, hi in extrema):
+                return "immagine a tinta unita (probabile output nero/corrotto)"
+    except Exception as exc:  # PIL.UnidentifiedImageError, OSError, ecc.
+        return f"immagine illeggibile ({exc})"
+
+    return None
 
 
 def _copy_to_comfy_input(src: Path, comfy_input_dir: Path) -> str:

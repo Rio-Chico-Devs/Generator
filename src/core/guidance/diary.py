@@ -21,6 +21,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.utils.atomic import atomic_append_line
+
 logger = logging.getLogger(__name__)
 
 
@@ -86,32 +88,71 @@ class DiaryEntry:
 
 
 def append_entry(diary_path: Path, entry: DiaryEntry) -> None:
-    """Appende una entry al file JSONL. Crea il file e le cartelle se mancanti."""
+    """Appende una entry al file JSONL. Crea il file e le cartelle se mancanti.
+
+    Scrittura durevole (flush + fsync): se l'app crasha subito dopo, l'entry
+    è già su disco."""
     diary_path = Path(diary_path)
-    diary_path.parent.mkdir(parents=True, exist_ok=True)
     line = json.dumps(entry.to_dict(), ensure_ascii=False)
-    with diary_path.open("a", encoding="utf-8") as fh:
-        fh.write(line + "\n")
+    atomic_append_line(diary_path, line)
     logger.debug("DiaryEntry appesa: %s (step=%s)", entry.entry_id, entry.step_id)
 
 
 def load_diary(diary_path: Path) -> list[DiaryEntry]:
     """Legge tutte le entry dal JSONL. Righe malformate vengono saltate con warning.
 
-    Ritorna lista vuota se il file non esiste."""
+    Ritorna lista vuota se il file non esiste.
+
+    Auto-riparazione: se l'ULTIMA riga è troncata (tipico crash a metà append),
+    viene messa in quarantena (.quarantine) e rimossa dal file, così il diario
+    resta leggibile. Le righe corrotte intermedie vengono solo saltate (non
+    rimosse: potrebbero diventare leggibili dopo un fix manuale)."""
     diary_path = Path(diary_path)
     if not diary_path.exists():
         return []
+
+    lines = diary_path.read_text(encoding="utf-8").splitlines()
     entries: list[DiaryEntry] = []
-    for lineno, raw in enumerate(diary_path.read_text(encoding="utf-8").splitlines(), 1):
-        raw = raw.strip()
-        if not raw:
+    last_line_corrupt = False
+
+    for lineno, raw in enumerate(lines, 1):
+        stripped = raw.strip()
+        if not stripped:
             continue
         try:
-            entries.append(DiaryEntry.from_dict(json.loads(raw)))
+            entries.append(DiaryEntry.from_dict(json.loads(stripped)))
         except (json.JSONDecodeError, KeyError) as exc:
-            logger.warning("Riga %d del diario malformata, saltata: %s", lineno, exc)
+            is_last = lineno == len(lines)
+            if is_last:
+                last_line_corrupt = True
+                logger.warning(
+                    "Ultima riga del diario troncata (crash a metà append?): %s", exc
+                )
+            else:
+                logger.warning("Riga %d del diario malformata, saltata: %s", lineno, exc)
+
+    if last_line_corrupt:
+        _repair_truncated_tail(diary_path, lines)
+
     return entries
+
+
+def _repair_truncated_tail(diary_path: Path, lines: list[str]) -> None:
+    """Sposta l'ultima riga (corrotta) in `.quarantine` e riscrive il diario senza."""
+    try:
+        bad = lines[-1]
+        quarantine = diary_path.with_suffix(diary_path.suffix + ".quarantine")
+        with quarantine.open("a", encoding="utf-8") as qf:
+            qf.write(bad + "\n")
+        good = "\n".join(lines[:-1])
+        if good:
+            good += "\n"
+        diary_path.write_text(good, encoding="utf-8")
+        logger.warning(
+            "Riga troncata spostata in %s — diario riparato.", quarantine.name
+        )
+    except OSError as exc:
+        logger.error("Riparazione diario fallita: %s", exc)
 
 
 def diary_stats(entries: list[DiaryEntry]) -> dict:

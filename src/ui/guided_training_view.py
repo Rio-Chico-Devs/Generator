@@ -78,6 +78,13 @@ class _CandidateThumb(QFrame):
         self._img_label.setStyleSheet("font-size: 24px; color: #777;")
         layout.addWidget(self._img_label)
 
+        self._warning_label = QLabel()
+        self._warning_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._warning_label.setWordWrap(True)
+        self._warning_label.setStyleSheet("color: #d9a441; font-size: 10px;")
+        self._warning_label.hide()
+        layout.addWidget(self._warning_label)
+
         self._approve_btn = QPushButton("✓  Approva")
         self._approve_btn.setEnabled(False)
         self._approve_btn.clicked.connect(lambda: self.approved.emit(self._index))
@@ -98,6 +105,14 @@ class _CandidateThumb(QFrame):
         self._approve_btn.setEnabled(True)
         self.setStyleSheet("")
 
+    def mark_warning(self, text: str) -> None:
+        """Segnala un candidato sospetto: bordo ambra + nota, ma resta approvabile
+        (la scelta finale è dell'utente)."""
+        self._warning_label.setText(f"⚠ {text}")
+        self._warning_label.show()
+        self.setStyleSheet("QFrame { border: 2px solid #d9a441; }")
+        self._approve_btn.setText("✓  Approva comunque")
+
     def mark_approved(self) -> None:
         self.setStyleSheet("QFrame { border: 3px solid #5cb85c; }")
         self._approve_btn.setText("✓  Approvato")
@@ -112,6 +127,8 @@ class _CandidateThumb(QFrame):
         self._img_label.setPixmap(QPixmap())
         self._img_label.setText("⏳")
         self._img_label.setStyleSheet("font-size: 24px; color: #777;")
+        self._warning_label.clear()
+        self._warning_label.hide()
         self._approve_btn.setText("✓  Approva")
         self._approve_btn.setEnabled(False)
         self.setStyleSheet("")
@@ -354,6 +371,10 @@ class _StepPane(QWidget):
         if 0 <= index < len(self._thumbs):
             self._thumbs[index].set_image(path)
 
+    def warn_candidate(self, index: int, text: str) -> None:
+        if 0 <= index < len(self._thumbs):
+            self._thumbs[index].mark_warning(text)
+
     def mark_approved(self, index: int) -> None:
         for i, t in enumerate(self._thumbs):
             if i == index:
@@ -579,6 +600,7 @@ class GuidedTrainingView(QWidget):
             attempt=self._step_attempt,
         )
         self._worker.candidate_ready.connect(self._on_candidate_ready)
+        self._worker.candidate_warning.connect(self._on_candidate_warning)
         self._worker.step_complete.connect(self._on_step_complete)
         self._worker.error.connect(self._on_worker_error)
         self._worker.start()
@@ -588,6 +610,9 @@ class GuidedTrainingView(QWidget):
         self._step_pane.set_status(
             f"Generazione {index + 1}/{self._n_candidates}…"
         )
+
+    def _on_candidate_warning(self, index: int, text: str) -> None:
+        self._step_pane.warn_candidate(index, text)
 
     def _on_step_complete(self, candidates: list[Candidate]) -> None:
         self._pending_candidates = candidates
@@ -735,6 +760,7 @@ class GuidedTrainingView(QWidget):
         # la UI dopo il reset.
         try:
             w.candidate_ready.disconnect()
+            w.candidate_warning.disconnect()
             w.step_complete.disconnect()
             w.error.disconnect()
         except RuntimeError:
