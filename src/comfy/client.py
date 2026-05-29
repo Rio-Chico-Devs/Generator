@@ -81,7 +81,10 @@ class ComfyClientProtocol(Protocol):
     def is_alive(self) -> bool: ...
     def submit(self, workflow: dict) -> str: ...
     def wait_for_completion(
-        self, prompt_id: str, progress_callback: Optional[Callable[[int, int], None]]
+        self,
+        prompt_id: str,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        abort_check: Optional[Callable[[], bool]] = None,
     ) -> list[Path]: ...
     def interrupt(self) -> None: ...
     def clear_queue(self) -> None: ...
@@ -145,46 +148,61 @@ class ComfyClient:
         logger.info("Workflow submitted, prompt_id=%s", prompt_id)
         return prompt_id
 
+    # Timeout di ogni singola recv(): breve per permettere l'aborto rapido.
+    # Il watchdog dell'idle totale usa _IDLE_WATCHDOG_SEC.
+    _RECV_TIMEOUT_SEC: float = 2.0
+    _IDLE_WATCHDOG_SEC: float = 120.0
+
     def wait_for_completion(
         self,
         prompt_id: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
-        idle_timeout: float = 120.0,
+        abort_check: Optional[Callable[[], bool]] = None,
     ) -> list[Path]:
         """Ascolta il WebSocket per il progresso, ritorna le immagini prodotte.
 
-        Robustezza contro i crash silenziosi:
-        - ``execution_error``  → solleva ComfyError/ComfyOutOfMemory col motivo;
-        - ``execution_interrupted`` → solleva ComfyInterrupted;
-        - silenzio per ``idle_timeout`` secondi → watchdog: se il prompt è già
-          in history procede, se ComfyUI non risponde più solleva, altrimenti
-          (ancora vivo, nodo lungo) continua ad attendere.
-
-        Senza queste protezioni un OOM o un crash di ComfyUI lasciavano il
-        thread appeso per sempre con la progress bar ferma.
+        Robustezza:
+        - execution_error / execution_interrupted → eccezioni tipizzate;
+        - silenzio per _IDLE_WATCHDOG_SEC → watchdog; se ComfyUI è vivo ma
+          silenzioso (nodo lungo), continua; se crashato, solleva;
+        - abort_check() → controlla aborto a ogni ciclo recv (timeout 2s),
+          così stop() non deve aspettare 120s per sbloccare il thread.
         """
         import websocket  # websocket-client
 
         ws = websocket.WebSocket()
-        ws.settimeout(idle_timeout)
+        ws.settimeout(self._RECV_TIMEOUT_SEC)
         try:
             ws.connect(f"ws://{self.host}:{self.port}/ws?clientId={self.client_id}")
         except (OSError, websocket.WebSocketException) as e:
             raise ComfyError(f"Connessione WebSocket a ComfyUI fallita: {e}") from e
 
+        idle_since = time.monotonic()
+
         try:
             while True:
+                # Controlla aborto PRIMA di bloccarsi in recv.
+                if abort_check is not None and abort_check():
+                    raise ComfyInterrupted("Esecuzione interrotta dall'utente.")
+
                 try:
                     msg = ws.recv()
+                    idle_since = time.monotonic()  # qualsiasi messaggio resetta l'idle
                 except websocket.WebSocketTimeoutException:
-                    if self._is_finished(prompt_id):
-                        break  # completato, ma il messaggio finale è andato perso
-                    if not self.is_alive():
-                        raise ComfyError(
-                            "ComfyUI non risponde più (possibile crash). "
-                            "Controlla logs/comfyui.log."
-                        )
-                    continue  # ancora vivo: nodo lungo, continua ad attendere
+                    # Controlla aborto anche qui: dopo ogni recv timeout di 2s.
+                    if abort_check is not None and abort_check():
+                        raise ComfyInterrupted("Esecuzione interrotta dall'utente.")
+                    idle_elapsed = time.monotonic() - idle_since
+                    if idle_elapsed >= self._IDLE_WATCHDOG_SEC:
+                        if self._is_finished(prompt_id):
+                            break  # completato, messaggio finale perso
+                        if not self.is_alive():
+                            raise ComfyError(
+                                "ComfyUI non risponde più (possibile crash). "
+                                "Controlla logs/comfyui.log."
+                            )
+                        idle_since = time.monotonic()  # resetta per evitare re-trigger
+                    continue
                 except websocket.WebSocketConnectionClosedException:
                     if self._is_finished(prompt_id):
                         break
@@ -201,7 +219,8 @@ class ComfyClient:
 
                 if mtype == "progress":
                     if progress_callback and "value" in d and "max" in d:
-                        progress_callback(d["value"], d["max"])
+                        # Cast esplicito: JSON può dare float (es. 1.0 invece di 1)
+                        progress_callback(int(d["value"]), int(d["max"]))
                 elif mtype == "executing":
                     if d.get("node") is None and d.get("prompt_id") == prompt_id:
                         break  # esecuzione completata
@@ -215,7 +234,13 @@ class ComfyClient:
             except Exception:
                 pass
 
-        return self._fetch_outputs(prompt_id)
+        outputs = self._fetch_outputs(prompt_id)
+        if not outputs:
+            raise ComfyError(
+                f"ComfyUI ha completato il prompt {prompt_id} ma non ha prodotto "
+                "immagini. Controlla il workflow e i nodi SaveImage."
+            )
+        return outputs
 
     @staticmethod
     def _build_execution_error(d: dict) -> ComfyError:
@@ -327,10 +352,13 @@ class MockComfyClient:
         self,
         prompt_id: str,
         progress_callback: Optional[Callable[[int, int], None]] = None,
+        abort_check: Optional[Callable[[], bool]] = None,
     ) -> list[Path]:
         total = 30
         for i in range(total):
             time.sleep(0.03)
+            if abort_check is not None and abort_check():
+                raise ComfyInterrupted("Esecuzione interrotta dall'utente.")
             if progress_callback:
                 progress_callback(i + 1, total)
         return [self._make_placeholder(prompt_id)]

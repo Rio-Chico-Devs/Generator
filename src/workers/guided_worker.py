@@ -29,6 +29,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.comfy.client import ComfyClientProtocol, ComfyInterrupted
 from src.comfy.workflow import WorkflowTemplate
+from src.utils.atomic import atomic_write_text
 from src.core.catalog import dialect_for_model
 from src.core.guidance.session import Candidate, GuidedSession, StepDefinition
 from src.core.guidance.technique_library import TechniqueLibrary
@@ -128,6 +129,9 @@ class GuidedWorker(QThread):
         else:
             self._governor = ThermalGovernor(self._safety)
         self._aborted = False
+        # Traccia i file temporanei copiati nella input dir di ComfyUI: vengono
+        # puliti dopo il completamento dello step o sull'abort.
+        self._temp_input_files: list[Path] = []
 
     def abort(self) -> None:
         self._aborted = True
@@ -140,8 +144,11 @@ class GuidedWorker(QThread):
         except Exception as exc:
             logger.warning("clear_queue() fallito: %s", exc)
 
-    def stop(self, timeout_ms: int = 5000) -> None:
-        """Interrompe il worker e attende la sua terminazione (max timeout_ms)."""
+    def stop(self, timeout_ms: int = 10_000) -> None:
+        """Interrompe il worker e attende la sua terminazione (max timeout_ms).
+
+        Il timeout è 10s (non 5): con abort_check il worker risponde entro ~2s,
+        ma in caso di freeze di ComfyUI lasciamo margine prima di terminate()."""
         if not self.isRunning():
             return
         self.abort()
@@ -224,6 +231,7 @@ class GuidedWorker(QThread):
             outputs = self._client.wait_for_completion(
                 prompt_id,
                 progress_callback=lambda s, t: self.progress.emit(s, t),
+                abort_check=lambda: self._aborted,
             )
 
             if self._aborted:
@@ -233,6 +241,14 @@ class GuidedWorker(QThread):
                 dest = self._step_dir / f"candidate_{i:02d}{src.suffix}"
                 if src.resolve() != dest.resolve():
                     shutil.copy2(src, dest)
+                # Rimuovi subito da comfy_outputs: il file è già in step_dir,
+                # non serve tenere un duplicato. Senza cleanup si accumula
+                # indefinitamente (4 candidati × 4 step × N sessioni).
+                try:
+                    if src.exists() and src.resolve() != dest.resolve():
+                        src.unlink()
+                except OSError as exc:
+                    logger.debug("Pulizia comfy_outputs fallita per %s: %s", src.name, exc)
 
                 record_i = replace(
                     record_base,
@@ -264,6 +280,8 @@ class GuidedWorker(QThread):
             # Piccolo cooldown tra candidati (no freno termico, solo pausa)
             if i < step_def.n_candidates - 1 and self._safety.enabled:
                 self._interruptible_sleep(self._safety.cooldown_between_images_sec)
+
+        self._cleanup_temp_inputs()
 
         if self._aborted:
             self.error.emit("Generazione interrotta dall'utente.")
@@ -343,7 +361,10 @@ class GuidedWorker(QThread):
         input_basename: Optional[str] = None
         if is_img2img and input_image is not None:
             if self._comfy_input_dir is not None:
-                input_basename = _copy_to_comfy_input(input_image, self._comfy_input_dir)
+                input_basename, temp_path = _copy_to_comfy_input(
+                    input_image, self._comfy_input_dir
+                )
+                self._temp_input_files.append(temp_path)
                 _safe_set(wf, "input_image", input_basename)
             else:
                 logger.warning(
@@ -371,6 +392,18 @@ class GuidedWorker(QThread):
             input_image=input_basename,
             is_img2img=is_img2img,
         )
+
+    # --- Pulizia risorse temporanee -------------------------------------
+
+    def _cleanup_temp_inputs(self) -> None:
+        """Rimuove i file temporanei copiati nella input dir di ComfyUI."""
+        for p in self._temp_input_files:
+            try:
+                p.unlink(missing_ok=True)
+                logger.debug("Temp input rimosso: %s", p.name)
+            except OSError as exc:
+                logger.debug("Pulizia temp input fallita per %s: %s", p.name, exc)
+        self._temp_input_files.clear()
 
     # --- Freno termico / sleep ------------------------------------------
 
@@ -419,9 +452,7 @@ def _write_candidate_sidecar(image_path: Path, record: CandidateRecord) -> None:
     data = {k: (str(v) if isinstance(v, Path) else v) for k, v in record.__dict__.items()}
     sidecar = image_path.with_suffix(".json")
     try:
-        sidecar.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        atomic_write_text(sidecar, json.dumps(data, indent=2, ensure_ascii=False))
     except OSError as exc:
         logger.warning("Sidecar candidato non scritto: %s", exc)
 
@@ -456,10 +487,15 @@ def _validate_candidate_image(path: Path) -> Optional[str]:
 
     try:
         with Image.open(path) as img:
+            # Leggi solo l'header per avere le dimensioni reali (no load completo).
+            w_real, h_real = img.size
+            if w_real < _MIN_IMAGE_DIM or h_real < _MIN_IMAGE_DIM:
+                return f"dimensioni degeneri ({w_real}×{h_real})"
+            # Ridimensiona in-place a 64×64 prima di caricare i pixel:
+            # risparmia ~3MB per immagine 1024×1024 — il controllo della
+            # monocromia funziona identicamente su un thumbnail.
+            img.thumbnail((_MIN_IMAGE_DIM, _MIN_IMAGE_DIM))
             img.load()
-            w, h = img.size
-            if w < _MIN_IMAGE_DIM or h < _MIN_IMAGE_DIM:
-                return f"dimensioni degeneri ({w}×{h})"
             extrema = img.convert("RGB").getextrema()
             if all(lo == hi for lo, hi in extrema):
                 return "immagine a tinta unita (probabile output nero/corrotto)"
@@ -469,9 +505,14 @@ def _validate_candidate_image(path: Path) -> Optional[str]:
     return None
 
 
-def _copy_to_comfy_input(src: Path, comfy_input_dir: Path) -> str:
+def _copy_to_comfy_input(src: Path, comfy_input_dir: Path) -> tuple[str, Path]:
+    """Copia `src` nella input dir di ComfyUI con nome univoco.
+
+    Ritorna (basename, path_completo) così il worker può tracciarlo per la
+    pulizia a fine step (evita accumulo indefinito in ComfyUI/input/)."""
     comfy_input_dir.mkdir(parents=True, exist_ok=True)
     unique_name = f"vf_guided_{uuid.uuid4().hex[:12]}{src.suffix}"
-    shutil.copy2(src, comfy_input_dir / unique_name)
+    dest = comfy_input_dir / unique_name
+    shutil.copy2(src, dest)
     logger.debug("Input guided copiato: %s → %s", src.name, unique_name)
-    return unique_name
+    return unique_name, dest
