@@ -48,6 +48,11 @@ class ComfyServer:
     def comfy_dir(self) -> Path:
         return get_user_data_dir() / "engine" / "ComfyUI"
 
+    @property
+    def input_dir(self) -> Path:
+        """Cartella input di ComfyUI: i LoadImage leggono i file da qui."""
+        return self.comfy_dir / "input"
+
     def is_installed(self) -> bool:
         return (self.comfy_dir / "main.py").exists()
 

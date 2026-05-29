@@ -186,6 +186,17 @@ class GuidedWorker(QThread):
             )
             return
 
+        # Senza la input dir di ComfyUI non possiamo cablare l'img2img: il nodo
+        # LoadImage userebbe il default del template (input.png) e fallirebbe.
+        # Meglio fermarsi subito con un messaggio chiaro.
+        if is_img2img and self._comfy_input_dir is None:
+            self.error.emit(
+                "ComfyUI non è completamente inizializzato (cartella input non "
+                "disponibile): impossibile continuare con lo step img2img. "
+                "Riavvia la sessione quando ComfyUI è pronto."
+            )
+            return
+
         wf = self._load_workflow(is_img2img)
         self._step_dir.mkdir(parents=True, exist_ok=True)
 

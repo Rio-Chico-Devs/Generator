@@ -483,6 +483,8 @@ class GuidedTrainingView(QWidget):
         self._library: Optional[TechniqueLibrary] = None
         self._session: Optional[GuidedSession] = None
         self._worker = None
+        self._comfy_client = None
+        self._comfy_input_dir: Optional[Path] = None
         self._pending_candidates: list[Candidate] = []
         self._n_candidates = 4  # da step_def, aggiornato ad ogni step
         self._step_attempt = 0  # quante volte lo step corrente è stato (ri)generato
@@ -524,6 +526,12 @@ class GuidedTrainingView(QWidget):
 
     def set_comfy_client(self, client) -> None:
         self._comfy_client = client
+
+    def set_comfy_input_dir(self, input_dir) -> None:
+        """Cartella input di ComfyUI: gli step img2img copiano lì l'immagine
+        approvata dello step precedente. Senza questa, gli step 2+ non
+        possono fare img2img."""
+        self._comfy_input_dir = Path(input_dir) if input_dir else None
 
     # --- Avvio sessione --------------------------------------------------
 
@@ -596,6 +604,7 @@ class GuidedTrainingView(QWidget):
             project=self._project,
             client=self._comfy_client,
             step_dir=step_dir,
+            comfy_input_dir=self._comfy_input_dir,
             technique_library=self._library,
             attempt=self._step_attempt,
         )

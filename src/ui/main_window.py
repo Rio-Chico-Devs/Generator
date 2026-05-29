@@ -437,6 +437,8 @@ class MainWindow(QMainWindow):
         guided = getattr(self, "_guided_view", None)
         if guided is not None:
             guided.set_comfy_client(self._comfy_client)
+            if self._comfy_server is not None:
+                guided.set_comfy_input_dir(self._comfy_server.input_dir)
         self._render_status()
 
     def _on_comfy_failed(self, msg: str) -> None:
