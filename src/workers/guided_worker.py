@@ -222,6 +222,7 @@ class GuidedWorker(QThread):
 
             if not self._wait_until_cool():
                 if not self._aborted:
+                    self._cleanup_temp_inputs()
                     return
                 break
 

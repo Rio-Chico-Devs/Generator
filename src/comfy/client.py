@@ -287,7 +287,8 @@ class ComfyClient:
             headers={"Content-Type": "application/json"},
         )
         try:
-            urllib.request.urlopen(req, timeout=10)
+            with urllib.request.urlopen(req, timeout=10):
+                pass
         except Exception as exc:
             logger.warning("clear_queue() HTTP error: %s", exc)
 
