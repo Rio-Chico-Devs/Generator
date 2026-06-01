@@ -361,16 +361,22 @@ class MainWindow(QMainWindow):
         """Copia l'immagine finale della sessione guidata nella gallery del progetto."""
         if self._current_project is None:
             return
+        import os as _os
         import shutil as _shutil
         dest_dir = self._current_project.gallery_dir
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / image_path.name
         if not dest.exists():
-            _shutil.copy2(image_path, dest)
+            tmp = dest.with_suffix(".copy.tmp")
+            _shutil.copy2(image_path, tmp)
+            _os.replace(tmp, dest)
         # Copia anche sidecar
         sidecar = image_path.with_suffix(".json")
         if sidecar.exists():
-            _shutil.copy2(sidecar, dest.with_suffix(".json"))
+            sidecar_dest = dest.with_suffix(".json")
+            tmp_s = sidecar_dest.with_suffix(".copy.tmp")
+            _shutil.copy2(sidecar, tmp_s)
+            _os.replace(tmp_s, sidecar_dest)
         # Passa alla gallery
         self._switch_view("Gallery")
 

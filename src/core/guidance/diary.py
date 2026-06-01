@@ -147,7 +147,8 @@ def _repair_truncated_tail(diary_path: Path, lines: list[str]) -> None:
         good = "\n".join(lines[:-1])
         if good:
             good += "\n"
-        diary_path.write_text(good, encoding="utf-8")
+        from src.utils.atomic import atomic_write_text
+        atomic_write_text(diary_path, good)
         logger.warning(
             "Riga troncata spostata in %s — diario riparato.", quarantine.name
         )

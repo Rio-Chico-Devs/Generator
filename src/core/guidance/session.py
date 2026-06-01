@@ -196,7 +196,7 @@ class GuidedSession:
         self.results.append(result)
         if (
             result.approved_candidate is not None
-            and self.current_step_index >= len(self.pipeline)
+            and self.current_step_index == len(self.pipeline)
         ):
             self.status = STATUS_COMPLETED
             self.final_image_path = result.approved_candidate.image_path

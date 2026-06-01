@@ -273,7 +273,8 @@ class ComfyClient:
         import urllib.request
 
         req = urllib.request.Request(f"{self._base}/interrupt", data=b"")
-        urllib.request.urlopen(req, timeout=10)
+        with urllib.request.urlopen(req, timeout=10):
+            pass
 
     def clear_queue(self) -> None:
         """Svuota la coda pending di ComfyUI (POST /queue {"clear": true})."""
