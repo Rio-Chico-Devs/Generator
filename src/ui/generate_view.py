@@ -389,6 +389,8 @@ class GenerateView(QWidget):
         seed_row = QHBoxLayout()
         seed_row.addWidget(QLabel("Seed:"))
         self.seed_spin = QSpinBox()
+        # 2^31-1: massimo di QSpinBox (int32 firmato in C++). resolve_seed()
+        # genera seeds in 0..2^31-1 proprio per restare in questo range.
         self.seed_spin.setRange(-1, 2_147_483_647)
         self.seed_spin.setValue(-1)
         self.seed_spin.setToolTip("-1 = casuale ad ogni generazione")
@@ -806,8 +808,41 @@ class GenerateView(QWidget):
     def _finish_run(self) -> None:
         self.progress.setVisible(False)
         self.cancel_btn.setVisible(False)
+        self._disconnect_worker()
         self._worker = None
         self._update_generate_enabled()
+
+    def _disconnect_worker(self) -> None:
+        """Scollega tutti i segnali del worker corrente (se presente)."""
+        if self._worker is None:
+            return
+        for sig, slot in (
+            (self._worker.progress,    self._on_progress),
+            (self._worker.image_ready, self._on_image_ready),
+            (self._worker.cooling,     self._on_cooling),
+            (self._worker.error,       self._on_error),
+            (self._worker.finished_ok, self._on_finished),
+        ):
+            try:
+                sig.disconnect(slot)
+            except RuntimeError:
+                pass  # già disconnesso (es. shutdown() chiamato prima)
+
+    def shutdown(self) -> None:
+        """Ferma il worker in corso; chiamato da MainWindow.closeEvent.
+
+        Disconnette i segnali prima di wait() così eventuali signal in coda
+        non raggiungono slot di una view in fase di distruzione.
+        """
+        if self._worker is None:
+            return
+        self._disconnect_worker()
+        self._worker.abort()
+        self._worker.wait(5000)
+        if self._worker.isRunning():
+            self._worker.terminate()
+            self._worker.wait(1000)
+        self._worker = None
 
     def _on_cancel(self) -> None:
         if self._worker is not None:

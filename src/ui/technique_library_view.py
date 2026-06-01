@@ -215,9 +215,13 @@ class _SlotGrid(QWidget):
         scroll.setWidget(self._container)
 
     def load_refs(self, refs: list[TechniqueRef]) -> None:
-        # Rimuovi tutti i widget
-        for t in self._thumbs:
-            t.setParent(None)
+        # Svuota il layout correttamente: setParent(None) senza takeAt() lascia
+        # i QLayoutItem nel layout, che trattiene riferimenti dangling ai widget.
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
         self._thumbs.clear()
         self._selected_id = None
 

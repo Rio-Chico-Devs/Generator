@@ -234,19 +234,22 @@ class DiaryStatsView(QWidget):
         sec = _Section("🎨  Tecniche più usate (IP-Adapter)")
         top = usage.most_common(8)
         max_count = top[0][1] if top else 1
+
+        # Carica la libreria una sola volta (non dentro il loop: era 1 read/entry)
+        lib = None
+        if self._project:
+            try:
+                from src.core.guidance.technique_library import TechniqueLibrary
+                lib = TechniqueLibrary.load(self._project.technique_library_path)
+            except Exception:
+                pass
+
         for ref_id, count in top:
-            # Cerca label nella libreria se disponibile
             label = ref_id
-            if self._project:
-                lib = None
-                try:
-                    from src.core.guidance.technique_library import TechniqueLibrary
-                    lib = TechniqueLibrary.load(self._project.technique_library_path)
-                    r = lib.get(ref_id)
-                    if r:
-                        label = f"{r.slot}: {r.label or r.ref_id[:8]}"
-                except Exception:
-                    pass
+            if lib is not None:
+                r = lib.get(ref_id)
+                if r:
+                    label = f"{r.slot}: {r.label or r.ref_id[:8]}"
             bar = _StatBar(label, count, max_count, "#5b9bd5")
             sec.add_widget(bar)
         self._layout.addWidget(sec)
