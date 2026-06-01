@@ -205,8 +205,32 @@ def _maybe_finding(module: str, name: str, opcode: str) -> Finding | None:
 # ---------------------------------------------------------------------------
 
 
-def _parse_safetensors(data: bytes) -> tuple[bool, list[str], dict]:
-    """Legge solo l'header safetensors senza toccare i tensori.
+# Cap di sicurezza sull'header: un file corrotto/malevolo potrebbe dichiarare
+# un header_len enorme (fino a 2^64). Gli header reali stanno sotto i pochi MB.
+_MAX_HEADER_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
+def _read_header_region(path: Path) -> bytes:
+    """Legge solo length(8) + header dal file, senza caricare i tensori.
+
+    Per i checkpoint multi-GB questo evita di portare in RAM l'intero file:
+    serve solo l'header per il verdetto safetensors. Se l'header dichiarato
+    supera il cap o il file è troncato, ritorna quanto disponibile e lascia
+    che :func:`_parse_safetensors` emetta l'issue corrispondente.
+    """
+    with path.open("rb") as f:
+        length_bytes = f.read(8)
+        if len(length_bytes) < 8:
+            return length_bytes
+        header_len = struct.unpack("<Q", length_bytes)[0]
+        if header_len == 0 or header_len > _MAX_HEADER_BYTES:
+            return length_bytes  # il parser segnala "header_length non plausibile"
+        return length_bytes + f.read(header_len)
+
+
+def _parse_safetensors(data: bytes, total_size: int) -> tuple[bool, list[str], dict]:
+    """Valida l'header safetensors (``data`` = length+header) contro la
+    dimensione totale del file (``total_size``), senza toccare i tensori.
 
     Ritorna (struttura_ok, issues, metadata).
     """
@@ -217,10 +241,10 @@ def _parse_safetensors(data: bytes) -> tuple[bool, list[str], dict]:
 
     (header_len,) = struct.unpack_from("<Q", data, 0)
 
-    if header_len == 0 or header_len > 100 * 1024 * 1024:
+    if header_len == 0 or header_len > _MAX_HEADER_BYTES:
         return False, [f"header_length non plausibile: {header_len}"], {}
 
-    if len(data) < 8 + header_len:
+    if len(data) < 8 + header_len or total_size < 8 + header_len:
         return False, ["file troncato: header_len supera i byte disponibili"], {}
 
     try:
@@ -238,7 +262,7 @@ def _parse_safetensors(data: bytes) -> tuple[bool, list[str], dict]:
         metadata = {str(k): str(v) for k, v in raw_meta.items()}
 
     # Valida offset tensori contro la regione dati del file
-    data_region = len(data) - 8 - header_len
+    data_region = total_size - 8 - header_len
     tensor_keys = [k for k in header if k != "__metadata__"]
 
     for key in tensor_keys:
@@ -272,7 +296,15 @@ def _parse_safetensors(data: bytes) -> tuple[bool, list[str], dict]:
 
 
 def _scan_pickle_bytes(data: bytes) -> tuple[list[Finding], list[str]]:
-    """Scansiona opcode pickle senza eseguire nulla.
+    """Variante a buffer di :func:`_scan_pickle_ops` (per il .pkl dentro lo ZIP)."""
+    return _scan_pickle_ops(io.BytesIO(data))
+
+
+def _scan_pickle_ops(stream) -> tuple[list[Finding], list[str]]:
+    """Scansiona opcode pickle da uno stream senza eseguire nulla.
+
+    Accetta un file-like leggibile (così un .pt grezzo multi-GB viene letto
+    incrementalmente fino allo STOP, senza caricarlo tutto in RAM).
 
     Usa una finestra scorrevole sulle ultime 2 string literal per catturare
     sia GLOBAL (proto ≤ 3: "module name") che STACK_GLOBAL (proto ≥ 4:
@@ -286,7 +318,7 @@ def _scan_pickle_bytes(data: bytes) -> tuple[list[Finding], list[str]]:
     recent_strings: list[str] = []
 
     try:
-        ops = list(pickletools.genops(io.BytesIO(data)))
+        ops = list(pickletools.genops(stream))
     except Exception as exc:
         return findings, [f"pickle non analizzabile: {exc}"]
 
@@ -326,32 +358,41 @@ def _scan_pickle_bytes(data: bytes) -> tuple[list[Finding], list[str]]:
     return findings, issues
 
 
-def _scan_as_pickle(path: Path, data: bytes, sha256: str) -> ScanResult:
-    """Scansiona data come pickle — raw o zip-wrapped (PyTorch .pt moderni)."""
+def _scan_as_pickle(path: Path, sha256: str) -> ScanResult:
+    """Scansiona il file come pickle — raw o zip-wrapped (PyTorch .pt moderni).
+
+    Legge dallo storage senza caricare l'intero file in RAM: lo ZIP è aperto
+    direttamente dal path (solo il .pkl interno, piccolo, finisce in memoria),
+    il pickle grezzo è letto in streaming dal file handle.
+    """
     file_format = "pickle_raw"
     findings: list[Finding] = []
     issues: list[str] = []
 
-    if data[:4] == b"PK\x03\x04":
-        file_format = "pickle_zip"
-        try:
-            with zipfile.ZipFile(io.BytesIO(data)) as zf:
-                pkl_names = [n for n in zf.namelist() if n.endswith(".pkl")]
-                if not pkl_names:
-                    return ScanResult(
-                        path=path, verdict=ScanVerdict.UNKNOWN,
-                        sha256=sha256, file_format="zip_no_pkl",
-                        issues=["archivio ZIP senza .pkl interno riconoscibile"],
-                    )
-                findings, issues = _scan_pickle_bytes(zf.read(pkl_names[0]))
-        except zipfile.BadZipFile as exc:
-            return ScanResult(
-                path=path, verdict=ScanVerdict.UNKNOWN,
-                sha256=sha256, file_format="unknown",
-                issues=[f"ZIP malformato: {exc}"],
-            )
-    else:
-        findings, issues = _scan_pickle_bytes(data)
+    with path.open("rb") as f:
+        magic = f.read(4)
+        f.seek(0)
+
+        if magic == b"PK\x03\x04":
+            file_format = "pickle_zip"
+            try:
+                with zipfile.ZipFile(path) as zf:
+                    pkl_names = [n for n in zf.namelist() if n.endswith(".pkl")]
+                    if not pkl_names:
+                        return ScanResult(
+                            path=path, verdict=ScanVerdict.UNKNOWN,
+                            sha256=sha256, file_format="zip_no_pkl",
+                            issues=["archivio ZIP senza .pkl interno riconoscibile"],
+                        )
+                    findings, issues = _scan_pickle_bytes(zf.read(pkl_names[0]))
+            except zipfile.BadZipFile as exc:
+                return ScanResult(
+                    path=path, verdict=ScanVerdict.UNKNOWN,
+                    sha256=sha256, file_format="unknown",
+                    issues=[f"ZIP malformato: {exc}"],
+                )
+        else:
+            findings, issues = _scan_pickle_ops(f)
 
     verdict = ScanVerdict.DANGEROUS if findings else ScanVerdict.SUSPICIOUS_PICKLE
     # issues mostra prima le note diagnostiche, poi i findings in forma breve
@@ -385,7 +426,7 @@ def scan_model_file(path: str | Path) -> ScanResult:
     sha256 = _sha256(path)
 
     try:
-        data = path.read_bytes()
+        total_size = path.stat().st_size
     except OSError as exc:
         return ScanResult(
             path=path, verdict=ScanVerdict.UNKNOWN,
@@ -395,9 +436,17 @@ def scan_model_file(path: str | Path) -> ScanResult:
 
     ext = path.suffix.lower()
 
-    # --- Prova safetensors ---
+    # --- Prova safetensors (solo header, niente tensori in RAM) ---
     if ext in _SAFETENSORS_EXT or ext in _AMBIGUOUS_EXT:
-        ok, st_issues, metadata = _parse_safetensors(data)
+        try:
+            header_region = _read_header_region(path)
+        except OSError as exc:
+            return ScanResult(
+                path=path, verdict=ScanVerdict.UNKNOWN,
+                sha256=sha256, file_format="unknown",
+                issues=[f"impossibile leggere: {exc}"],
+            )
+        ok, st_issues, metadata = _parse_safetensors(header_region, total_size)
         if ok or ext in _SAFETENSORS_EXT:
             # File dichiarato .safetensors: ritorna SAFE o SUSPICIOUS
             verdict = ScanVerdict.SAFE if ok else ScanVerdict.SUSPICIOUS
@@ -408,9 +457,16 @@ def scan_model_file(path: str | Path) -> ScanResult:
             )
         # .bin non parsato come safetensors → prova come pickle
 
-    # --- Pickle scan ---
+    # --- Pickle scan (streaming dal file, niente read_bytes dell'intero file) ---
     if ext in _PICKLE_EXT or ext in _AMBIGUOUS_EXT:
-        return _scan_as_pickle(path, data, sha256)
+        try:
+            return _scan_as_pickle(path, sha256)
+        except OSError as exc:
+            return ScanResult(
+                path=path, verdict=ScanVerdict.UNKNOWN,
+                sha256=sha256, file_format="unknown",
+                issues=[f"impossibile leggere: {exc}"],
+            )
 
     # --- Formato sconosciuto → blocca ---
     return ScanResult(

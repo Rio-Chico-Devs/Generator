@@ -19,11 +19,20 @@ def _setup_logging(debug: bool) -> None:
     log_dir = get_app_data_dir() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Rotazione: il log non cresce all'infinito durante sessioni lunghe
+    # (5 MB × 3 backup = max ~20 MB su disco invece di un file illimitato).
+    from logging.handlers import RotatingFileHandler
+
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
-            logging.FileHandler(log_dir / "vihente-forge.log", encoding="utf-8"),
+            RotatingFileHandler(
+                log_dir / "vihente-forge.log",
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            ),
             logging.StreamHandler(sys.stdout),
         ],
     )
