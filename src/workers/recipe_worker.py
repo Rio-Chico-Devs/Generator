@@ -154,10 +154,6 @@ class RecipeWorker(QThread):
             self._comfy_input_dir,
         )
 
-        if self._aborted:
-            self.error.emit("Generazione interrotta dall'utente.")
-            return
-
         count = _resolve_count(self._user_params)
         base_seed = record.seed
         user_gave_seed = _int_or(self._user_params.get("seed"), -1) >= 0
@@ -165,53 +161,59 @@ class RecipeWorker(QThread):
         self._output_dir.mkdir(parents=True, exist_ok=True)
         final_paths: list[Path] = []
 
-        for i in range(count):
+        try:
             if self._aborted:
-                break
+                self.error.emit("Generazione interrotta dall'utente.")
+                return
 
-            if not self._wait_until_cool():
-                # ABORTED o TIMEOUT: messaggio già emesso (o abort silenzioso)
-                if not self._aborted:
-                    return  # timeout termico: stop senza finished_ok
-                break
+            for i in range(count):
+                if self._aborted:
+                    break
 
-            # Seed proprio per ogni immagine: se l'utente lo ha fissato, le
-            # varianti sono base_seed, base_seed+1, ...; altrimenti casuale.
-            seed_i = (base_seed + i) if user_gave_seed else resolve_seed(-1)
-            wf.set_seed(seed_i)
+                if not self._wait_until_cool():
+                    # ABORTED o TIMEOUT: messaggio già emesso (o abort silenzioso)
+                    if not self._aborted:
+                        return  # timeout termico: stop senza finished_ok
+                    break
 
-            prompt_id = self._client.submit(wf.build())
-            logger.info(
-                "Ricetta '%s' img %d/%d sottomessa — prompt_id=%s seed=%d",
-                self._recipe.id, i + 1, count, prompt_id, seed_i,
-            )
-            outputs = self._client.wait_for_completion(
-                prompt_id,
-                progress_callback=lambda s, t: self.progress.emit(s, t),
-                abort_check=lambda: self._aborted,
-            )
+                # Seed proprio per ogni immagine: se l'utente lo ha fissato, le
+                # varianti sono base_seed, base_seed+1, ...; altrimenti casuale.
+                seed_i = (base_seed + i) if user_gave_seed else resolve_seed(-1)
+                wf.set_seed(seed_i)
 
-            if self._aborted:
-                break
+                prompt_id = self._client.submit(wf.build())
+                logger.info(
+                    "Ricetta '%s' img %d/%d sottomessa — prompt_id=%s seed=%d",
+                    self._recipe.id, i + 1, count, prompt_id, seed_i,
+                )
+                outputs = self._client.wait_for_completion(
+                    prompt_id,
+                    progress_callback=lambda s, t: self.progress.emit(s, t),
+                    abort_check=lambda: self._aborted,
+                )
 
-            for src in outputs:
-                dest = _unique_dest(self._output_dir, src.name)
-                if src.resolve() != dest.resolve():
-                    shutil.copy2(src, dest)
-                _write_sidecar(dest, record, seed_i)
-                _embed_metadata(dest, record, seed_i)
-                final_paths.append(dest)
-                self.image_ready.emit(dest)
+                if self._aborted:
+                    break
 
-            # Cooldown fisso tra un'immagine e la successiva (non dopo l'ultima).
-            if i < count - 1 and self._safety.enabled:
-                self._interruptible_sleep(self._safety.cooldown_between_images_sec)
+                for src in outputs:
+                    dest = _unique_dest(self._output_dir, src.name)
+                    if src.resolve() != dest.resolve():
+                        shutil.copy2(src, dest)
+                    _write_sidecar(dest, record, seed_i)
+                    _embed_metadata(dest, record, seed_i)
+                    final_paths.append(dest)
+                    self.image_ready.emit(dest)
 
-        for tmp in _temp_input_files:
-            try:
-                tmp.unlink(missing_ok=True)
-            except OSError as exc:
-                logger.warning("Pulizia temp input fallita (%s): %s", tmp.name, exc)
+                # Cooldown fisso tra un'immagine e la successiva (non dopo l'ultima).
+                if i < count - 1 and self._safety.enabled:
+                    self._interruptible_sleep(self._safety.cooldown_between_images_sec)
+
+        finally:
+            for tmp in _temp_input_files:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except OSError as exc:
+                    logger.warning("Pulizia temp input fallita (%s): %s", tmp.name, exc)
 
         if self._aborted and not final_paths:
             self.error.emit("Generazione interrotta dall'utente.")

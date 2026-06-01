@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from src.utils.model_scan import _MAX_HEADER_BYTES
 from src.utils.paths import get_user_data_dir
 
 logger = logging.getLogger(__name__)
@@ -63,11 +64,6 @@ def ensure_studio_dirs() -> None:
 
 # --- Header safetensors -------------------------------------------------
 
-
-# Cap di sicurezza sull'header: un file corrotto/malevolo potrebbe dichiarare
-# un header_len enorme (fino a 2^64) e far tentare un'allocazione gigantesca.
-# Gli header safetensors reali stanno ben sotto i pochi MB.
-_MAX_HEADER_BYTES = 100 * 1024 * 1024  # 100 MB
 
 
 def read_safetensors_header(path: Path) -> dict:

@@ -216,84 +216,85 @@ class GuidedWorker(QThread):
 
         candidates: list[Candidate] = []
 
-        for i in range(step_def.n_candidates):
-            if self._aborted:
-                break
+        try:
+            for i in range(step_def.n_candidates):
+                if self._aborted:
+                    break
 
-            if not self._wait_until_cool():
-                if not self._aborted:
-                    self._cleanup_temp_inputs()
-                    return
-                break
+                if not self._wait_until_cool():
+                    if not self._aborted:
+                        return
+                    break
 
-            if self._session.seed < 0:
-                seed_i = resolve_seed(-1)  # sessione a seed casuale: ogni candidato random
-            else:
-                # Deterministico: l'offset per tentativo evita candidati identici
-                # tra una rigenerazione e l'altra dello stesso step.
-                # Modulo 2^32 per restare nel range valido per i sampler.
-                seed_i = (self._session.seed + self._attempt * 10_000 + i) % (2**32)
-            wf.set_seed(seed_i)
+                if self._session.seed < 0:
+                    seed_i = resolve_seed(-1)  # sessione a seed casuale: ogni candidato random
+                else:
+                    # Deterministico: l'offset per tentativo evita candidati identici
+                    # tra una rigenerazione e l'altra dello stesso step.
+                    # Modulo 2^32 per restare nel range valido per i sampler.
+                    seed_i = (self._session.seed + self._attempt * 10_000 + i) % (2**32)
+                wf.set_seed(seed_i)
 
-            prompt_id = self._client.submit(wf.build())
-            logger.info(
-                "Guided step '%s' candidato %d/%d — prompt_id=%s seed=%d",
-                step_def.id, i + 1, step_def.n_candidates, prompt_id, seed_i,
-            )
-            outputs = self._client.wait_for_completion(
-                prompt_id,
-                progress_callback=lambda s, t: self.progress.emit(s, t),
-                abort_check=lambda: self._aborted,
-            )
-
-            if self._aborted:
-                break
-
-            for src in outputs:
-                dest = self._step_dir / f"candidate_{i:02d}{src.suffix}"
-                if src.resolve() != dest.resolve():
-                    shutil.copy2(src, dest)
-                # Rimuovi subito da comfy_outputs: il file è già in step_dir,
-                # non serve tenere un duplicato. Senza cleanup si accumula
-                # indefinitamente (4 candidati × 4 step × N sessioni).
-                try:
-                    if src.exists() and src.resolve() != dest.resolve():
-                        src.unlink()
-                except OSError as exc:
-                    logger.debug("Pulizia comfy_outputs fallita per %s: %s", src.name, exc)
-
-                record_i = replace(
-                    record_base,
-                    candidate_index=i,
-                    seed=seed_i,
-                    technique_refs=list(record_base.technique_refs),
+                prompt_id = self._client.submit(wf.build())
+                logger.info(
+                    "Guided step '%s' candidato %d/%d — prompt_id=%s seed=%d",
+                    step_def.id, i + 1, step_def.n_candidates, prompt_id, seed_i,
                 )
-                _write_candidate_sidecar(dest, record_i)
-
-                # Pre-screening: scarta in anticipo immagini nere/corrotte così
-                # l'utente non approva per sbaglio un input degenere per lo step
-                # successivo.
-                warning = _validate_candidate_image(dest)
-
-                sidecar_path = dest.with_suffix(".json")
-                c = Candidate(
-                    index=i,
-                    image_path=dest,
-                    sidecar_path=sidecar_path,
-                    warning=warning,
+                outputs = self._client.wait_for_completion(
+                    prompt_id,
+                    progress_callback=lambda s, t: self.progress.emit(s, t),
+                    abort_check=lambda: self._aborted,
                 )
-                candidates.append(c)
-                self.candidate_ready.emit(i, dest)
-                if warning:
-                    logger.warning("Candidato %d sospetto: %s", i, warning)
-                    self.candidate_warning.emit(i, warning)
-                break  # una immagine per candidato
 
-            # Piccolo cooldown tra candidati (no freno termico, solo pausa)
-            if i < step_def.n_candidates - 1 and self._safety.enabled:
-                self._interruptible_sleep(self._safety.cooldown_between_images_sec)
+                if self._aborted:
+                    break
 
-        self._cleanup_temp_inputs()
+                for src in outputs:
+                    dest = self._step_dir / f"candidate_{i:02d}{src.suffix}"
+                    if src.resolve() != dest.resolve():
+                        shutil.copy2(src, dest)
+                    # Rimuovi subito da comfy_outputs: il file è già in step_dir,
+                    # non serve tenere un duplicato. Senza cleanup si accumula
+                    # indefinitamente (4 candidati × 4 step × N sessioni).
+                    try:
+                        if src.exists() and src.resolve() != dest.resolve():
+                            src.unlink()
+                    except OSError as exc:
+                        logger.debug("Pulizia comfy_outputs fallita per %s: %s", src.name, exc)
+
+                    record_i = replace(
+                        record_base,
+                        candidate_index=i,
+                        seed=seed_i,
+                        technique_refs=list(record_base.technique_refs),
+                    )
+                    _write_candidate_sidecar(dest, record_i)
+
+                    # Pre-screening: scarta in anticipo immagini nere/corrotte così
+                    # l'utente non approva per sbaglio un input degenere per lo step
+                    # successivo.
+                    warning = _validate_candidate_image(dest)
+
+                    sidecar_path = dest.with_suffix(".json")
+                    c = Candidate(
+                        index=i,
+                        image_path=dest,
+                        sidecar_path=sidecar_path,
+                        warning=warning,
+                    )
+                    candidates.append(c)
+                    self.candidate_ready.emit(i, dest)
+                    if warning:
+                        logger.warning("Candidato %d sospetto: %s", i, warning)
+                        self.candidate_warning.emit(i, warning)
+                    break  # una immagine per candidato
+
+                # Piccolo cooldown tra candidati (no freno termico, solo pausa)
+                if i < step_def.n_candidates - 1 and self._safety.enabled:
+                    self._interruptible_sleep(self._safety.cooldown_between_images_sec)
+
+        finally:
+            self._cleanup_temp_inputs()
 
         if self._aborted:
             self.error.emit("Generazione interrotta dall'utente.")

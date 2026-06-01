@@ -808,8 +808,10 @@ class GenerateView(QWidget):
     def _finish_run(self) -> None:
         self.progress.setVisible(False)
         self.cancel_btn.setVisible(False)
-        self._disconnect_worker()
-        self._worker = None
+        try:
+            self._disconnect_worker()
+        finally:
+            self._worker = None
         self._update_generate_enabled()
 
     def _disconnect_worker(self) -> None:
@@ -825,8 +827,8 @@ class GenerateView(QWidget):
         ):
             try:
                 sig.disconnect(slot)
-            except RuntimeError:
-                pass  # già disconnesso (es. shutdown() chiamato prima)
+            except Exception:
+                pass  # RuntimeError = già disconnesso; altri = segnale mancante (mock/subclass)
 
     def shutdown(self) -> None:
         """Ferma il worker in corso; chiamato da MainWindow.closeEvent.
