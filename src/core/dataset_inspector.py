@@ -16,6 +16,8 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 
+from src.utils.atomic import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
@@ -111,7 +113,7 @@ def save_caption(item: DatasetItem, text: str) -> None:
             logger.warning("Impossibile rimuovere caption %s: %s", item.caption_path, exc)
         return
     try:
-        item.caption_path.write_text(text, encoding="utf-8")
+        atomic_write_text(item.caption_path, text)
     except OSError as exc:
         logger.warning("Impossibile salvare caption %s: %s", item.caption_path, exc)
         raise

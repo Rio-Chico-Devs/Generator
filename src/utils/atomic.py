@@ -48,6 +48,33 @@ def atomic_write_text(path: Path, data: str, encoding: str = "utf-8") -> None:
         raise
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Scrive `data` (binario) su `path` in modo atomico (temp + fsync + rename).
+
+    Variante binaria di :func:`atomic_write_text`, per file come i PNG: una
+    riscrittura in-place che crasha a metà corromperebbe l'immagine, mentre
+    qui o resta la vecchia o appare la nuova, mai una via di mezzo.
+    """
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            tmp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+
+
 def atomic_append_line(path: Path, line: str, encoding: str = "utf-8") -> None:
     """Appende una riga a un file JSONL in modo durevole.
 

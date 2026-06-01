@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.utils.atomic import atomic_write_text
 from src.utils.paths import get_app_data_dir
 
 logger = logging.getLogger(__name__)
@@ -272,14 +273,12 @@ class CreditWallet:
         return get_app_data_dir() / "credits.json"
 
     def save(self) -> None:
-        p = self.config_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "schema_version": 1,
             "balance": self.balance,
             "ledger": [asdict(e) for e in self.ledger],
         }
-        p.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        atomic_write_text(self.config_path(), json.dumps(data, indent=2))
 
     @classmethod
     def load(cls) -> "CreditWallet":

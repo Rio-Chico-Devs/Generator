@@ -15,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.utils.atomic import atomic_write_text
 from src.utils.paths import get_user_data_dir
 
 logger = logging.getLogger(__name__)
@@ -86,8 +87,8 @@ class PoseLibrary:
             "schema_version": SCHEMA_VERSION,
             "poses": {pid: _entry_dict(e) for pid, e in self._poses.items()},
         }
-        self.index_path.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
+        atomic_write_text(
+            self.index_path, json.dumps(data, indent=2, ensure_ascii=False)
         )
 
     # --- Query ----------------------------------------------------

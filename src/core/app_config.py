@@ -12,6 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
+from src.utils.atomic import atomic_write_text
 from src.utils.paths import get_app_data_dir
 
 if TYPE_CHECKING:
@@ -61,9 +62,7 @@ class AppConfig:
         )
 
     def save(self) -> None:
-        p = self.config_path()
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
+        atomic_write_text(self.config_path(), json.dumps(asdict(self), indent=2))
 
     @classmethod
     def load(cls) -> AppConfig:

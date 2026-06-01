@@ -64,6 +64,12 @@ def ensure_studio_dirs() -> None:
 # --- Header safetensors -------------------------------------------------
 
 
+# Cap di sicurezza sull'header: un file corrotto/malevolo potrebbe dichiarare
+# un header_len enorme (fino a 2^64) e far tentare un'allocazione gigantesca.
+# Gli header safetensors reali stanno ben sotto i pochi MB.
+_MAX_HEADER_BYTES = 100 * 1024 * 1024  # 100 MB
+
+
 def read_safetensors_header(path: Path) -> dict:
     """Legge solo l'header JSON di un .safetensors (no caricamento pesi).
 
@@ -74,6 +80,12 @@ def read_safetensors_header(path: Path) -> dict:
         if len(length_bytes) < 8:
             return {}
         header_len = struct.unpack("<Q", length_bytes)[0]
+        if header_len <= 0 or header_len > _MAX_HEADER_BYTES:
+            logger.warning(
+                "Header safetensors anomalo in %s: %d byte (cap %d) — ignorato",
+                path.name, header_len, _MAX_HEADER_BYTES,
+            )
+            return {}
         header_bytes = f.read(header_len)
     try:
         return json.loads(header_bytes)

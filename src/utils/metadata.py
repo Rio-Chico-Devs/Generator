@@ -11,11 +11,14 @@ non si crea dipendenza circolare con ``workers/recipe_worker``.
 """
 from __future__ import annotations
 
+import io
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from PIL import Image
 from PIL.PngImagePlugin import PngInfo
+
+from src.utils.atomic import atomic_write_bytes
 
 APP_VERSION = "0.1.0"
 
@@ -81,8 +84,12 @@ def embed_a1111_parameters(png_path: Path, parameters_text: str) -> bool:
             info.add_text(key, value)
     info.add_text("parameters", parameters_text)
 
+    # Serializza in memoria e scrivi atomico: una save() in-place che crasha
+    # a metà corromperebbe l'immagine già prodotta da ComfyUI.
     try:
-        img.save(png_path, format="PNG", pnginfo=info, compress_level=4)
+        buf = io.BytesIO()
+        img.save(buf, format="PNG", pnginfo=info, compress_level=4)
+        atomic_write_bytes(png_path, buf.getvalue())
     except OSError:
         return False
     return True
