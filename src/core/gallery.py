@@ -14,6 +14,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from src.utils.atomic import atomic_write_text
+
 logger = logging.getLogger(__name__)
 
 IMAGE_EXTS = frozenset({".png", ".jpg", ".jpeg", ".webp"})
@@ -200,9 +202,7 @@ def set_rating(image: Path, rating: Optional[str]) -> dict:
     if not data and not sc.exists():
         return data
     try:
-        sc.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        atomic_write_text(sc, json.dumps(data, indent=2, ensure_ascii=False))
     except OSError as exc:
         logger.warning("Giudizio non salvato per %s: %s", image.name, exc)
     return data
@@ -240,7 +240,7 @@ def add_to_dataset(item: GalleryItem, dataset_dir: Path) -> Path:
 
     caption = item.prompt.strip()
     if caption:
-        dest.with_suffix(".txt").write_text(caption, encoding="utf-8")
+        atomic_write_text(dest.with_suffix(".txt"), caption)
 
     logger.info("Immagine aggiunta al dataset: %s → %s", item.path.name, dest)
     return dest

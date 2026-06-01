@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.utils.atomic import atomic_write_text
 from src.utils.paths import get_projects_dir
 
 logger = logging.getLogger(__name__)
@@ -200,9 +201,9 @@ class Project:
 
     def save(self) -> None:
         self.updated_at = _utcnow_iso()
-        self.project_json_path.write_text(
+        atomic_write_text(
+            self.project_json_path,
             json.dumps(self.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
         )
         logger.debug("Project saved: %s", self.project_json_path)
 

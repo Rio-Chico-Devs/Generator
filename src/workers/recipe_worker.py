@@ -32,6 +32,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from src.utils.atomic import atomic_write_text
+
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from src.comfy.client import ComfyClientProtocol, ComfyInterrupted
@@ -126,6 +128,10 @@ class RecipeWorker(QThread):
             self._client.interrupt()
         except Exception as exc:
             logger.warning("interrupt() fallito: %s", exc)
+        try:
+            self._client.clear_queue()
+        except Exception as exc:
+            logger.warning("clear_queue() fallito: %s", exc)
 
     def run(self) -> None:
         try:
@@ -140,7 +146,7 @@ class RecipeWorker(QThread):
         wf_path = get_assets_dir() / "workflows" / self._recipe.workflow_file
         wf = WorkflowTemplate(wf_path)
 
-        record = _parametrize(
+        record, _temp_input_files = _parametrize(
             wf,
             self._recipe,
             self._user_params,
@@ -182,6 +188,7 @@ class RecipeWorker(QThread):
             outputs = self._client.wait_for_completion(
                 prompt_id,
                 progress_callback=lambda s, t: self.progress.emit(s, t),
+                abort_check=lambda: self._aborted,
             )
 
             if self._aborted:
@@ -199,6 +206,12 @@ class RecipeWorker(QThread):
             # Cooldown fisso tra un'immagine e la successiva (non dopo l'ultima).
             if i < count - 1 and self._safety.enabled:
                 self._interruptible_sleep(self._safety.cooldown_between_images_sec)
+
+        for tmp in _temp_input_files:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError as exc:
+                logger.warning("Pulizia temp input fallita (%s): %s", tmp.name, exc)
 
         if self._aborted and not final_paths:
             self.error.emit("Generazione interrotta dall'utente.")
@@ -250,7 +263,7 @@ class RecipeWorker(QThread):
 # a set_role nel loop residuo.
 _HANDLED_KEYS = frozenset(
     {"prompt", "scene_prompt", "negative", "seed", "width", "height",
-     "lora_weight", "variants", "batch"}
+     "lora_weight", "loras", "variants", "batch"}
 )
 
 
@@ -260,15 +273,16 @@ def _parametrize(
     user_params: dict[str, Any],
     project: Project,
     comfy_input_dir: Optional[Path] = None,
-) -> GenerationRecord:
+) -> tuple[GenerationRecord, list[Path]]:
     """Applica user_params + contesto progetto al WorkflowTemplate.
 
     Ordine deliberato: checkpoint → prompt+CLIP skip → seed → dimensioni →
     LoRA → immagini input → knob numerici residui.
 
-    Funzione pura rispetto a Qt: nessun signal, nessun thread. Ritorna un
-    :class:`GenerationRecord` con i parametri effettivamente applicati (per il
-    sidecar di riproducibilità)."""
+    Funzione pura rispetto a Qt: nessun signal, nessun thread. Ritorna una
+    tupla (:class:`GenerationRecord`, lista di Path temporanei da pulire)."""
+    temp_input_files: list[Path] = []
+
     # 1. Checkpoint dal progetto (base_model → nome file safetensors)
     model_id = project.base_model.id if project.base_model is not None else ""
     if model_id:
@@ -366,7 +380,8 @@ def _parametrize(
                 "comfy_input_dir non fornita — immagine '%s' non caricata", inp.key
             )
             continue
-        dest_name = _copy_to_comfy_input(src_path, comfy_input_dir)
+        dest_name, dest_path = _copy_to_comfy_input(src_path, comfy_input_dir)
+        temp_input_files.append(dest_path)
         node_spec = wf.mapping.get(inp.key)
         if node_spec and "node" in node_spec:
             wf.set_input_image(node_spec["node"], dest_name)
@@ -397,7 +412,7 @@ def _parametrize(
         cfg=_role_or_none(wf, "cfg"),
         sampler=_role_or_none(wf, "sampler"),
         seed=actual_seed,
-    )
+    ), temp_input_files
 
 
 # ---------------------------------------------------------------------------
@@ -428,15 +443,13 @@ def _unique_dest(out_dir: Path, name: str) -> Path:
 
 
 def _write_sidecar(image_path: Path, record: GenerationRecord, seed: int) -> None:
-    """Scrive il sidecar JSON dei parametri accanto all'immagine."""
+    """Scrive il sidecar JSON dei parametri accanto all'immagine (atomico)."""
     data = asdict(record)
     data["seed"] = seed
     data["created_at"] = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
     sidecar = image_path.with_suffix(".json")
     try:
-        sidecar.write_text(
-            json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8"
-        )
+        atomic_write_text(sidecar, json.dumps(data, indent=2, ensure_ascii=False))
     except OSError as exc:
         logger.warning("Sidecar non scritto per %s: %s", image_path.name, exc)
 
@@ -548,14 +561,16 @@ def _resolve_lora_path(project: Project) -> Optional[Path]:
     return None
 
 
-def _copy_to_comfy_input(src: Path, comfy_input_dir: Path) -> str:
-    """Copia src in comfy_input_dir con nome univoco. Ritorna il basename.
+def _copy_to_comfy_input(src: Path, comfy_input_dir: Path) -> tuple[str, Path]:
+    """Copia src in comfy_input_dir con nome univoco. Ritorna (basename, path completo).
 
     Il nome univoco evita collisioni tra sessioni e tra ricette diverse
-    in esecuzione concorrente.
+    in esecuzione concorrente. Il path completo permette la pulizia dopo la
+    generazione.
     """
     comfy_input_dir.mkdir(parents=True, exist_ok=True)
     unique_name = f"vf_{uuid.uuid4().hex[:12]}{src.suffix}"
-    shutil.copy2(src, comfy_input_dir / unique_name)
+    dest = comfy_input_dir / unique_name
+    shutil.copy2(src, dest)
     logger.debug("Input copiato in ComfyUI: %s → %s", src.name, unique_name)
-    return unique_name
+    return unique_name, dest
