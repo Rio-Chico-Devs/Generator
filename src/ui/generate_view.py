@@ -827,8 +827,8 @@ class GenerateView(QWidget):
         ):
             try:
                 sig.disconnect(slot)
-            except Exception:
-                pass  # RuntimeError = già disconnesso; altri = segnale mancante (mock/subclass)
+            except RuntimeError:
+                pass  # già disconnesso (es. shutdown() chiamato prima)
 
     def shutdown(self) -> None:
         """Ferma il worker in corso; chiamato da MainWindow.closeEvent.
