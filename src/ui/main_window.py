@@ -236,6 +236,14 @@ class MainWindow(QMainWindow):
                 else:
                     v.set_safety(self._app_config.thermal_safety(), None)
                 self._guided_view = v
+            elif name == "Train":
+                from src.ui.train_view import TrainView
+                import os as _os
+                v = TrainView()
+                sdscripts_env = _os.environ.get("VFORGE_SDSCRIPTS_DIR", "")
+                if sdscripts_env:
+                    v.set_sdscripts_dir(Path(sdscripts_env))
+                self._train_view = v
             elif name == "Tecniche":
                 from src.ui.technique_library_view import TechniqueLibraryView
                 v = TechniqueLibraryView()
@@ -309,30 +317,31 @@ class MainWindow(QMainWindow):
             diary = getattr(self, "_diary_view", None)
             if diary is not None:
                 diary.set_project(self._current_project)
+            tv = getattr(self, "_train_view", None)
+            if tv is not None:
+                tv.set_project(self._current_project)
             self._render_status()
         except Exception as e:
             QMessageBox.critical(self, "Errore", f"Caricamento progetto fallito:\n{e}")
 
     def _on_new_project(self) -> None:
-        # Stub: in Fase 1 vero aprirà ProjectDialog
-        from PyQt6.QtWidgets import QInputDialog
+        from src.ui.project_dialog import ProjectDialog
 
-        name, ok = QInputDialog.getText(self, "Nuovo progetto", "Nome del progetto:")
-        if not ok or not name.strip():
+        dlg = ProjectDialog(parent=self)
+        if dlg.exec() != ProjectDialog.DialogCode.Accepted:
             return
 
-        try:
-            project = Project.create(name=name.strip())
-            self._refresh_projects_list()
-            QMessageBox.information(
-                self,
-                "Progetto creato",
-                f"Progetto '{project.name}' creato in:\n{project.root}\n\n"
-                f"Tag attivatore: {project.activator_tag}",
-            )
-        except Exception as e:
-            logger.exception("Creazione progetto fallita")
-            QMessageBox.critical(self, "Errore", f"Creazione fallita:\n{e}")
+        project = dlg.project
+        if project is None:
+            return
+
+        self._refresh_projects_list()
+        QMessageBox.information(
+            self,
+            "Progetto creato",
+            f"Progetto «{project.name}» creato.\n\n"
+            f"Tag attivatore: {project.activator_tag}",
+        )
 
     def _switch_view(self, name: str) -> None:
         view = self._views.get(name)
@@ -355,6 +364,10 @@ class MainWindow(QMainWindow):
             tech = getattr(self, "_technique_view", None)
             if tech is not None and self._current_project is not None:
                 tech.set_project(self._current_project)
+        elif name == "Train":
+            tv = getattr(self, "_train_view", None)
+            if tv is not None and self._current_project is not None:
+                tv.set_project(self._current_project)
         self.workspace.setCurrentWidget(view)
 
     def _on_guided_save_to_gallery(self, image_path: Path) -> None:
@@ -522,6 +535,13 @@ class MainWindow(QMainWindow):
                 guided.shutdown()
             except Exception as exc:
                 logger.warning("Shutdown vista guidata fallito: %s", exc)
+
+        train = getattr(self, "_train_view", None)
+        if train is not None:
+            try:
+                train.shutdown()
+            except Exception as exc:
+                logger.warning("Shutdown vista training fallito: %s", exc)
 
         poller = getattr(self, "_gpu_poller", None)
         if poller is not None:
