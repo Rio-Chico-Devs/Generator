@@ -127,7 +127,7 @@ def _minimal_generate_toml(
     min_snr_gamma: float = 5.0,
     custom_prompts: list[str] | None = None,
     resume_from: Path | None = None,
-) -> str:
+) -> tuple:
     import toml
 
     preset = get_preset(preset_id)

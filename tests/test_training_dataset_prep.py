@@ -86,16 +86,13 @@ class TestSafeTag:
 
 
 def _make_png(path: Path) -> None:
-    """Crea un PNG 1×1 pixel valido (header minimo)."""
-    # PNG magic + minimal IHDR + IDAT + IEND
-    data = (
-        b"\x89PNG\r\n\x1a\n"
-        b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x02"
-        b"\x00\x00\x00\x90wS\xde"
-        b"\x00\x00\x00\x0cIDATx\x9cc\xf8\x0f\x00\x00\x01\x01\x00\x05\x18\xd8N"
-        b"\x00\x00\x00\x00IEND\xaeB`\x82"
-    )
-    path.write_bytes(data)
+    """Crea un PNG valido usando Pillow se disponibile, altrimenti un file > 1 KB."""
+    try:
+        from PIL import Image
+        Image.new("RGB", (4, 4), color=(128, 64, 32)).save(path, "PNG")
+    except ImportError:
+        # Pillow non installato: _is_readable_image usa size check (> 1024 byte)
+        path.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 1100)
 
 
 def _make_images(images_dir: Path, n: int, with_captions: bool = True) -> list[Path]:
