@@ -46,7 +46,7 @@ class TrainingParams:
     train_text_encoder: bool = False       # richiede VRAM extra
     noise_offset: float = 0.0             # 0.0-0.1, contrasto output
     min_snr_gamma: float = 5.0            # convergenza
-    custom_sample_prompts: list[str] = None  # type: ignore[assignment]
+    custom_sample_prompts: Optional[list[str]] = None
     resume_from: Optional[Path] = None    # checkpoint per resume da crash
 
     def __post_init__(self) -> None:

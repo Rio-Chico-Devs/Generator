@@ -480,12 +480,17 @@ class TestPoseLibraryCRUD:
 
 class TestPoseLibrarySearch:
     def setup_method(self):
+        import shutil
         import tempfile
         self._tmp = Path(tempfile.mkdtemp())
         self.lib = _lib(self._tmp)
         self.lib.add(_entry(1, categories=["standing", "frontal"], tags=["dynamic"], user_notes="eroica"))
         self.lib.add(_entry(2, categories=["sitting", "profile"], tags=["static"], favorite=True))
         self.lib.add(_entry(3, categories=["lying", "posterior"], tags=["relaxed"]))
+
+    def teardown_method(self):
+        import shutil
+        shutil.rmtree(self._tmp, ignore_errors=True)
 
     def test_search_no_filter_returns_all(self):
         assert len(self.lib.search()) == 3
