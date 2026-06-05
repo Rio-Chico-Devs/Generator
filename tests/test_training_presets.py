@@ -84,7 +84,9 @@ class TestTrainingPresetFields:
     def test_resolution_is_string(self, pid):
         res = PRESETS[pid].resolution
         assert isinstance(res, str)
-        assert "x" in res or res.isdigit()
+        # Formato sd-scripts: "512,512" o "1024,1024" (anche singolo "512")
+        parts = res.split(",")
+        assert all(p.strip().isdigit() for p in parts)
 
     @pytest.mark.parametrize("pid", list(PresetId))
     def test_min_vram_positive(self, pid):
