@@ -321,8 +321,15 @@ class ComfyClient:
                 fname = img["filename"]
                 subfolder = img.get("subfolder", "")
                 img_type = img.get("type", "output")
+                # Sanitizza il nome per la scrittura locale: il filename arriva da
+                # una risposta di rete, .name scarta qualsiasi componente di path
+                # (es. "../") impedendo scritture fuori da out_dir.
+                safe_name = Path(fname).name
+                if not safe_name:
+                    logger.warning("Output con filename non valido ignorato: %r", fname)
+                    continue
                 data = self._download_image(fname, subfolder, img_type)
-                dest = out_dir / fname
+                dest = out_dir / safe_name
                 dest.write_bytes(data)
                 paths.append(dest)
         return paths

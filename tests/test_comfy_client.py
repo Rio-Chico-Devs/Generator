@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 from src.comfy.client import (
     ComfyClient,
     ComfyError,
@@ -104,3 +107,85 @@ def test_build_execution_error_generic():
     assert not isinstance(err, ComfyOutOfMemory)
     assert "VAEDecode" in str(err)
     assert "tensor shape mismatch" in str(err)
+
+
+# ---------------------------------------------------------------------------
+# Sicurezza: _fetch_outputs non deve scrivere fuori da out_dir
+# ---------------------------------------------------------------------------
+
+
+class _FakeResp:
+    """Context manager minimale che simula la risposta di urlopen."""
+
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
+def _patch_history(monkeypatch, history: dict) -> None:
+    import urllib.request
+
+    monkeypatch.setattr(
+        urllib.request,
+        "urlopen",
+        lambda *a, **k: _FakeResp(json.dumps(history).encode("utf-8")),
+    )
+
+
+def test_fetch_outputs_sanitizes_path_traversal(tmp_path, monkeypatch):
+    from src.utils import paths as paths_mod
+
+    # out_dir isolato sotto tmp_path
+    monkeypatch.setattr(paths_mod, "get_app_data_dir", lambda: tmp_path)
+    import src.comfy.client as client_mod
+    monkeypatch.setattr(client_mod, "ComfyClient", ComfyClient)
+
+    c = ComfyClient(port=9999)
+    # Evita la seconda chiamata di rete: _download_image ritorna byte fissi.
+    monkeypatch.setattr(c, "_download_image", lambda f, s, t: b"PNGDATA")
+
+    pid = "p1"
+    _patch_history(monkeypatch, {
+        pid: {"outputs": {"9": {"images": [
+            {"filename": "../../evil.png", "subfolder": "", "type": "output"},
+        ]}}},
+    })
+
+    out_dir = tmp_path / "comfy_outputs"
+    paths = c._fetch_outputs(pid)
+
+    assert len(paths) == 1
+    written = paths[0]
+    # Il file deve stare DENTRO out_dir, non fuori (nessun escape via ../).
+    assert written.parent == out_dir
+    assert written.name == "evil.png"
+    assert written.read_bytes() == b"PNGDATA"
+    # Nessun file scritto fuori da out_dir.
+    assert not (tmp_path.parent / "evil.png").exists()
+
+
+def test_fetch_outputs_skips_empty_filename(tmp_path, monkeypatch):
+    from src.utils import paths as paths_mod
+
+    monkeypatch.setattr(paths_mod, "get_app_data_dir", lambda: tmp_path)
+
+    c = ComfyClient(port=9999)
+    monkeypatch.setattr(c, "_download_image", lambda f, s, t: b"X")
+
+    pid = "p2"
+    _patch_history(monkeypatch, {
+        pid: {"outputs": {"9": {"images": [
+            {"filename": "/", "subfolder": "", "type": "output"},
+        ]}}},
+    })
+
+    paths = c._fetch_outputs(pid)
+    assert paths == []
