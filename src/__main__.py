@@ -34,7 +34,16 @@ def main() -> int:
     _bootstrap_env()
 
     # Import qui, DOPO env setup
-    from src.app import run_app
+    try:
+        from src.app import run_app
+    except ImportError as e:
+        print(f"ERRORE: dipendenza mancante — {e}", file=sys.stderr)
+        print(
+            "Installa le dipendenze con:\n"
+            "    pip install -r requirements.txt",
+            file=sys.stderr,
+        )
+        return 1
 
     return run_app(sys.argv)
 

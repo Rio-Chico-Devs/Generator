@@ -26,6 +26,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from src.core.project import ActiveLora, Project
 from src.training.config import TrainingParams, generate_toml, sdscripts_launch_cmd
 from src.training.dataset_prep import DatasetReport, prepare_dataset
+from src.training.output_stream import iter_output_lines
 from src.training.presets import PresetId, TrainingPreset, get_preset
 from src.training.run_status import (
     STATUS_ABORTED,
@@ -113,6 +114,25 @@ class TrainingWorker(QThread):
     # --- Thread entry point -----------------------------------------------
 
     def run(self) -> None:
+        """Wrapper di sicurezza: nessuna eccezione deve uscire dal thread.
+
+        Senza questo, un errore imprevisto (es. I/O su disco pieno nelle
+        fasi di preparazione) terminerebbe il QThread in silenzio lasciando
+        la UI bloccata su RUNNING e il subprocess kohya orfano.
+        """
+        try:
+            self._run_impl()
+        except Exception as exc:
+            logger.exception("TrainingWorker: errore non gestito")
+            proc = self._process
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
+            self.error.emit(f"Errore interno del training: {exc}")
+
+    def _run_impl(self) -> None:
         preset = get_preset(self._preset_id)
         run_id = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         run_dir = self._project.training_runs_dir / run_id
@@ -227,9 +247,23 @@ class TrainingWorker(QThread):
                 )
                 assert self._process.stdout is not None
 
-                for raw_line in self._process.stdout:
+                # iter_output_lines splitta anche su '\r': tqdm (sd-scripts)
+                # aggiorna il progresso sulla stessa riga, senza questo la UI
+                # resterebbe congelata fino al newline di fine epoca.
+                log_write_ok = True
+                for raw_line in iter_output_lines(self._process.stdout):
                     line = raw_line.rstrip()
-                    log_fh.write(line + "\n")
+                    if log_write_ok:
+                        try:
+                            log_fh.write(line + "\n")
+                        except OSError as exc:
+                            # Disco pieno: smette di scrivere il log ma il
+                            # monitoraggio del training continua.
+                            log_write_ok = False
+                            logger.warning(
+                                "Scrittura training.log fallita "
+                                "(disco pieno?): %s", exc
+                            )
                     self.log_line.emit(line)
 
                     if self._aborted:
@@ -242,12 +276,19 @@ class TrainingWorker(QThread):
                 ret = self._process.returncode
 
         except Exception as exc:
-            msg = f"Errore avvio subprocess: {exc}"
+            msg = f"Errore durante il training: {exc}"
             logger.exception(msg)
+            # Mai lasciare orfano il subprocess se il monitor fallisce.
+            proc = self._process
+            if proc is not None and proc.poll() is None:
+                try:
+                    proc.terminate()
+                except OSError:
+                    pass
             self.error.emit(msg)
             status.status = STATUS_ERROR
             status.error_message = msg
-            status.save(run_dir)
+            _safe_save(status, run_dir)
             return
         finally:
             self._process = None
@@ -309,7 +350,7 @@ class TrainingWorker(QThread):
             status.current_epoch = epoch
             status.max_epochs = total
             self.epoch_changed.emit(epoch, total)
-            status.save(run_dir)
+            _safe_save(status, run_dir)
 
         # Step progress (tqdm format: "  5%|... 50/1000")
         m = _RE_STEP.search(line)
@@ -331,7 +372,7 @@ class TrainingWorker(QThread):
                 # Campiona: una ogni 5 step per non inflazionare il JSON
                 if len(status.loss_history) == 0 or step - status.loss_history[-1].step >= 5:
                     status.loss_history.append(lp)
-                    status.save(run_dir)
+                    _safe_save(status, run_dir)
                 self.loss_update.emit(loss_val, step)
                 # Warning instabilità
                 loss_window.append(loss_val)
@@ -365,11 +406,23 @@ class TrainingWorker(QThread):
                 ckpt_path = run_dir / "checkpoints" / ckpt_path.name
             if ckpt_path.exists():
                 status.last_checkpoint_path = str(ckpt_path)
-                status.save(run_dir)
+                _safe_save(status, run_dir)
                 self.checkpoint_saved.emit(ckpt_path, status.current_epoch)
 
 
 # --- Helpers ----------------------------------------------------------
+
+
+def _safe_save(status: RunStatus, run_dir: Path) -> None:
+    """Salva status.json senza propagare errori I/O (es. disco pieno).
+
+    La persistenza del progresso è best-effort: un fallimento non deve
+    interrompere il monitoraggio di un training in corso.
+    """
+    try:
+        status.save(run_dir)
+    except OSError as exc:
+        logger.warning("Salvataggio status.json fallito: %s", exc)
 
 
 def _load_manifest(project: Project) -> dict | None:
