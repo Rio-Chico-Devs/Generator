@@ -1,0 +1,13 @@
+# Dipendenze MINIME per eseguire la test suite (no stack inferenza/training).
+#   pip install -r requirements-test.txt
+#
+# Per l'app completa serve invece requirements.txt (diffusers, xformers, ...).
+# Versioni allineate a requirements.txt / requirements-dev.txt.
+
+PyQt6==6.7.1
+PyQt6-Qt6==6.7.2
+Pillow==10.4.0
+toml==0.10.2
+
+pytest==8.3.2
+pytest-qt==4.4.0
