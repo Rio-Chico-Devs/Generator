@@ -336,6 +336,16 @@ class MainWindow(QMainWindow):
             return
 
         self._refresh_projects_list()
+
+        # Auto-attiva il nuovo progetto: seleziona il suo item nella lista
+        # così l'utente non deve fare double-click manualmente.
+        for i in range(self.projects_list.count()):
+            item = self.projects_list.item(i)
+            if item and item.data(Qt.ItemDataRole.UserRole) == str(project.root):
+                self.projects_list.setCurrentItem(item)
+                self._on_project_activated(item)
+                break
+
         QMessageBox.information(
             self,
             "Progetto creato",
@@ -358,7 +368,7 @@ class MainWindow(QMainWindow):
                 dv.set_project(self._current_project)
         elif name == "Diario":
             diary = getattr(self, "_diary_view", None)
-            if diary is not None:
+            if diary is not None and self._current_project is not None:
                 diary.set_project(self._current_project)
         elif name == "Tecniche":
             tech = getattr(self, "_technique_view", None)
