@@ -1,0 +1,11 @@
+# Input per pip-compile --generate-hashes -> genera requirements-test.txt
+# con SHA256 pinnati. Rigenerare con:
+#   pip-compile --generate-hashes --output-file=requirements-test.txt requirements-test.in
+
+PyQt6==6.7.1
+PyQt6-Qt6==6.7.2
+Pillow==10.4.0
+toml==0.10.2
+
+pytest==8.3.2
+pytest-qt==4.4.0
