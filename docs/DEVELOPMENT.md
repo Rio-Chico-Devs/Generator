@@ -1,287 +1,266 @@
 # Sviluppo
 
-## Requisiti hardware (sviluppo + runtime)
+## Due modalità di sviluppo
 
-- **GPU**: NVIDIA con 8+ GB VRAM, compute capability 7.0+ (RTX 2060+, RTX 30xx/40xx)
-- **CUDA Toolkit**: 12.1 (compatibile con torch 2.4)
-- **Driver NVIDIA**: 535+ (Windows) / 535+ (Linux)
-- **RAM sistema**: 16 GB minimo, 32 GB consigliato (per cache latents + UI fluida)
-- **Disco**: 50 GB liberi (10 venv + 30 modelli + spazio progetti)
-- **OS**: Windows 10/11, Linux (Ubuntu 22.04+), macOS (solo CPU per ora, no training)
+| Modalità | Quando | Cosa serve |
+|---|---|---|
+| **Logica / UI** | Tutti i giorni, senza GPU | Python 3.11, PyQt6, Pillow, pytest |
+| **Generazione reale** | Test end-to-end con output veri | + ComfyUI installato + GPU NVIDIA 8 GB |
 
-## Requisiti software
+Il motore di generazione è **ComfyUI headless** (processo figlio locale).
+L'app non importa torch né diffusers: parla con ComfyUI via HTTP/WebSocket.
+In `--mock` tutto lo sviluppo UI funziona senza GPU e senza ComfyUI installato.
 
-- **Python 3.11.x** — NON 3.12 (torch wheel + bitsandbytes hanno problemi su Windows con 3.12)
-- **Git** per clonare sd-scripts
-- **Visual Studio Build Tools 2022** su Windows (per compilare alcune dipendenze native, es. xformers se non c'è wheel pre-built)
+---
 
-## Setup Windows
-
-```powershell
-# 1. Verifica Python 3.11
-python --version
-# Atteso: Python 3.11.x
-
-# 2. Verifica CUDA
-nvidia-smi
-# Atteso: CUDA Version: 12.1 o superiore
-
-# 3. Clone repo (futuro)
-git clone <repo> C:\dev\vihente-forge
-cd C:\dev\vihente-forge
-
-# 4. Crea virtual environment
-python -m venv .venv
-.venv\Scripts\activate
-
-# 5. Aggiorna pip + setuptools
-python -m pip install --upgrade pip setuptools wheel
-
-# 6. Installa PyTorch CUDA 12.1 PRIMA del resto (versione esatta)
-pip install torch==2.4.1+cu121 torchvision==0.19.1+cu121 --index-url https://download.pytorch.org/whl/cu121
-
-# 7. Resto delle dipendenze
-pip install -r requirements.txt
-
-# 8. Clone sd-scripts (engine training)
-git clone https://github.com/kohya-ss/sd-scripts.git external/sd-scripts
-cd external\sd-scripts
-git checkout sdxl
-pip install --no-deps -r requirements.txt
-cd ..\..
-
-# 9. Verifica torch + CUDA
-python -c "import torch; print('CUDA:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0)); print('VRAM:', torch.cuda.get_device_properties(0).total_memory / 1e9, 'GB')"
-# Atteso: CUDA: True, GPU name, VRAM > 7 GB
-
-# 10. Avvia app in dev mode
-python -m src
-```
-
-## Setup Linux (Ubuntu 22.04+)
+## Setup sviluppo logica / UI (senza GPU)
 
 ```bash
-# 1. Dipendenze sistema
-sudo apt update
-sudo apt install python3.11 python3.11-venv python3.11-dev git build-essential
+# 1. Python 3.11
+python --version   # Python 3.11.x
 
-# 2. CUDA Toolkit (se non già presente)
-# Segui guida NVIDIA per CUDA 12.1
-# Verifica:
-nvidia-smi
-nvcc --version
-
-# 3. Clone repo
+# 2. Clone repo
 git clone <repo> ~/dev/vihente-forge
 cd ~/dev/vihente-forge
 
-# 4. Venv
-python3.11 -m venv .venv
-source .venv/bin/activate
+# 3. Virtual environment
+python -m venv .venv
+source .venv/bin/activate          # Linux/macOS
+# .venv\Scripts\activate           # Windows
 
-# 5. Pip upgrade
-pip install --upgrade pip setuptools wheel
+# 4. Dipendenze leggere (UI + test)
+pip install PyQt6 Pillow pytest pytest-qt ruff black
 
-# 6. PyTorch
-pip install torch==2.4.1+cu121 torchvision==0.19.1+cu121 --index-url https://download.pytorch.org/whl/cu121
-
-# 7. Dipendenze
-pip install -r requirements.txt
-
-# 8. sd-scripts
-git clone https://github.com/kohya-ss/sd-scripts.git external/sd-scripts
-(cd external/sd-scripts && git checkout sdxl && pip install --no-deps -r requirements.txt)
-
-# 9. Verifica
-python -c "import torch; print(torch.cuda.is_available())"
-
-# 10. Run
-python -m src
+# 5. Verifica
+pytest tests/ -x
+python -m src --mock --skip-model-check   # apre la finestra
 ```
 
-## `requirements.txt` (riferimento)
+Non serve CUDA, non serve torch, non serve ComfyUI per sviluppare e
+testare la logica applicativa.
+
+---
+
+## Setup runtime completo (generazione reale)
+
+Necessario solo per testare ricette end-to-end con output veri.
+
+### Requisiti hardware
+- **GPU**: NVIDIA 8+ GB VRAM (RTX 2060+, RTX 30xx/40xx)
+- **RAM**: 16 GB minimo, 32 GB consigliato
+- **Disco**: 50 GB liberi (ComfyUI + modelli + progetti)
+- **OS**: Windows 10/11 o Ubuntu 22.04+
+
+### Installazione ComfyUI
+
+```bash
+# Nella cartella dati utente (default: ~/Documents/Vihente\ Forge/engine/)
+git clone https://github.com/comfyanonymous/ComfyUI.git
+cd ComfyUI
+# Pinna la versione nota-funzionante (aggiornare con cautela)
+git checkout <commit-hash-pinnato>
+
+pip install -r requirements.txt   # installa torch CUDA qui
+
+# Custom nodes necessari per le ricette
+cd custom_nodes
+git clone https://github.com/ltdrdata/ComfyUI-Impact-Pack          # Adetailer
+git clone https://github.com/cubiq/ComfyUI_IPAdapter_plus           # IP-Adapter
+git clone https://github.com/Fannovel16/comfyui_controlnet_aux      # pose extraction
+git clone https://github.com/huchenlei/ComfyUI-IC-Light-Diffusion   # IC-Light
+```
+
+### Symlink modelli
+
+```bash
+# Linka la cartella modelli app → cartella ComfyUI (no duplicati su disco)
+ln -s ~/Documents/Vihente\ Forge/models/base    ComfyUI/models/checkpoints
+ln -s ~/Documents/Vihente\ Forge/models/lora    ComfyUI/models/loras
+ln -s ~/Documents/Vihente\ Forge/models/controlnet  ComfyUI/models/controlnet
+ln -s ~/Documents/Vihente\ Forge/models/ipadapter   ComfyUI/models/ipadapter
+```
+
+### Avvio app con ComfyUI reale
+
+```bash
+python -m src --skip-model-check   # l'app avvia ComfyUI come processo figlio
+```
+
+---
+
+## Profili di runtime
+
+```bash
+# Sviluppo UI: mock completo (no GPU, no ComfyUI)
+python -m src --mock --skip-model-check
+
+# Debug verbose
+python -m src --mock --debug
+
+# Runtime reale con ComfyUI
+python -m src
+
+# Cartella dati isolata (per test senza toccare dati reali)
+python -m src --mock --data-dir ./test_data
+```
+
+---
+
+## `requirements.txt` — stack runtime completo
 
 ```
 # UI
 PyQt6==6.7.1
-PyQt6-Qt6==6.7.2
-
-# Inference engine
-diffusers==0.30.3
-transformers==4.44.2
-accelerate==0.33.0
-safetensors==0.4.5
-huggingface-hub==0.24.6
 
 # Image processing
 Pillow==10.4.0
 numpy==1.26.4
 opencv-python-headless==4.10.0.84
 
-# Tagging (ONNX)
+# Tagging dataset (ONNX, Fase 2)
 onnxruntime-gpu==1.19.2
 onnx==1.16.2
 
-# Training support (sd-scripts uses these too)
-xformers==0.0.27.post2
-bitsandbytes==0.43.3        # Windows: usare bitsandbytes-windows-webui se quella ufficiale dà problemi
-prodigyopt==1.0
-lion-pytorch==0.2.2
+# Training (sd-scripts, Fase 2)
+# torch + xformers + bitsandbytes installati nel venv sd-scripts separato
 
-# Upscaler
-realesrgan==0.3.0
-basicsr==1.4.2
-
-# Util
+# Utility
 toml==0.10.2
-psutil==6.0.0
+psutil==6.0.0          # kill orphan processes
+websocket-client==1.8.0   # client WebSocket per ComfyUI progress
+send2trash==1.8.3      # delete sicuro progetti
 watchdog==4.0.2
 
-# Dev (opzionale)
+# Dev (non a runtime)
 pytest==8.3.2
 pytest-qt==4.4.0
 black==24.8.0
 ruff==0.6.4
 ```
 
-## Variabili d'ambiente importanti
+**Nota**: `torch`, `diffusers`, `transformers`, `accelerate` NON sono
+dipendenze dell'app. Sono dipendenze di ComfyUI (installate nel venv di
+ComfyUI separato). L'app non li importa mai.
+
+---
+
+## Training (Fase 2) — sd-scripts separato
+
+Il training LyCORIS usa `sd-scripts` (kohya) in un venv dedicato,
+avviato dall'app come subprocess (come ComfyUI).
 
 ```bash
-# Disabilita telemetria HuggingFace
-export HF_HUB_DISABLE_TELEMETRY=1
-
-# Cartella modelli custom (default: ~/Documents/Vihente Forge/models)
-export VFORGE_MODELS_DIR=/path/custom
-
-# Modalità offline (post-download iniziale)
-export HF_HUB_OFFLINE=1
-
-# Riduce frammentazione VRAM (utile su 8GB)
-export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
-
-# Su Windows con xformers, può servire:
-export XFORMERS_FORCE_DISABLE_TRITON=1
+# Setup una-tantum (Fase 2)
+git clone https://github.com/kohya-ss/sd-scripts.git external/sd-scripts
+cd external/sd-scripts
+git checkout sdxl                    # branch SDXL
+python -m venv .venv-sdscripts
+source .venv-sdscripts/bin/activate
+pip install torch==2.4.1+cu121 --index-url https://download.pytorch.org/whl/cu121
+pip install -r requirements.txt
+pip install lycoris_lora             # LyCORIS support
 ```
 
-L'app setta queste automaticamente in `__main__.py` PRIMA di importare
-torch/diffusers (importante: l'ordine conta).
+---
+
+## Variabili d'ambiente
+
+```bash
+# Override cartelle (utile per test isolati)
+export VFORGE_APP_DIR=/tmp/vforge-test-app
+export VFORGE_DATA_DIR=/tmp/vforge-test-data
+export VFORGE_MODELS_DIR=/tmp/vforge-test-models
+export VFORGE_PROJECTS_DIR=/tmp/vforge-test-projects
+
+# Modalità offline dopo download iniziale (nessuna connessione rete)
+export HF_HUB_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1
+
+# Riduce frammentazione VRAM (utile 8GB, per ComfyUI)
+export PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+```
+
+---
 
 ## Strategia dev
 
 ### Branch model
-- `main` — solo release stabili
-- `develop` — integration branch
-- `feature/{nome}` — sviluppo singole feature
+- `main` — release stabili
+- `feature/{nome}` — singole feature
 
-### Conventional commits (suggerito)
+### Conventional commits
 ```
-feat(training): add resume from checkpoint
-fix(ui): prevent freeze during dataset import
-refactor(core): extract LoRA loader to module
-docs(readme): update setup instructions
+feat(comfy): add WorkflowTemplate with semantic mapping
+fix(ui): prevent status bar freeze on GPU poll
+refactor(recipes): extract parametrize to pure function
+docs(models): add auxiliary model catalog
+test(recipe_worker): cover abort signal path
 ```
 
 ### Pre-commit checks
-- `ruff check src/` — linting
-- `black --check src/` — formatting
-- `pytest tests/ -m "not slow"` — fast tests
-
-Le slow test (integration con GPU reale) si lanciano solo manualmente:
 ```bash
-pytest tests/ -m slow
+ruff check src/        # linting
+black --check src/     # formatting
+pytest tests/ -x       # tutti i test (veloci, no GPU)
 ```
 
-## Profili di runtime
-
-L'app supporta flag CLI per development:
-
+I test marcati `@pytest.mark.slow` richiedono GPU e ComfyUI reale:
 ```bash
-# Modalità normale
-python -m src
-
-# Mock pipeline (no GPU, per test UI rapidi)
-python -m src --mock
-
-# Log verbose
-python -m src --debug
-
-# Test progetto isolato
-python -m src --data-dir ./test_data
-
-# Skip download check (se modelli già presenti)
-python -m src --skip-model-check
+pytest tests/ -m slow   # solo manualmente
 ```
 
-## Build di release (PyInstaller)
+---
 
-Lo script `scripts/build.py` gestisce build pulita. Riferimento:
+## Build di release (Fase 7, PyInstaller)
 
 ```bash
 python scripts/build.py --target windows --version 0.1.0
 ```
 
-Cosa fa:
-1. Clean `build/`, `dist/`
-2. Verifica dipendenze
-3. PyInstaller one-folder con `--collect-all PyQt6 --collect-all diffusers`
-4. Strip simboli debug
-5. Copia README, LICENSE, asset
-6. Crea installer NSIS se Windows
-7. Zip finale in `dist/vihente-forge-{version}-{platform}.zip`
+Cosa include il bundle:
+1. App PyQt6 + dipendenze leggere
+2. ComfyUI pinnato + custom nodes (pre-installati)
+3. Script primo avvio (download modelli guidato)
 
-**Dimensione attesa build Windows**: ~3 GB (PyTorch + CUDA libs è grosso).
-Modelli scaricati separatamente al primo avvio (NON inclusi nel bundle).
+**Non include**: modelli AI (~15-22 GB). Download guidato al primo avvio.
+**Dimensione bundle senza modelli**: ~800 MB (PyQt6 + ComfyUI base).
+
+---
 
 ## Troubleshooting comune
 
 | Problema | Causa probabile | Fix |
 |---|---|---|
-| `torch.cuda.is_available()` False | Driver NVIDIA o CUDA non installato | Reinstalla driver, riavvia. Verifica `nvidia-smi` |
-| OOM al primo generate | Altre app usano VRAM | Chiudi Chrome/giochi. Verifica `nvidia-smi` mostra <500MB usati |
-| `xformers` import error | Versione mismatch con torch | `pip install xformers --no-deps` e prendi la versione che corrisponde al torch |
-| Training crash immediato | sd-scripts non installato bene | Verifica `external/sd-scripts/` esista e i suoi requirements installati |
-| UI freeze durante generation | Worker non in QThread | Verifica decorator `@worker_thread` o subclass corretta |
-| Output sempre nero | VAE bug fp16 SDXL | Forza `madebyollin/sdxl-vae-fp16-fix` o `no_half_vae = true` per training |
-| `bitsandbytes` error su Windows | Wheel ufficiale a volte rotta | Usa `bitsandbytes-windows-webui` come fallback |
-| Hugging Face timeout | Rate limit o connessione lenta | Aumenta `HF_HUB_DOWNLOAD_TIMEOUT=60` |
+| `pytest` fallisce su import PyQt6 | PyQt6 non installato nel venv | `pip install PyQt6` |
+| Finestra non compare in `--mock` | Display non disponibile (server headless) | Normale in CI/cloud: verifica la logica con pytest |
+| ComfyUI non parte (timeout 60s) | Path ComfyUI sbagliato o dipendenze mancanti | Controlla `logs/comfyui.log`; verifica `engine/ComfyUI/main.py` esiste |
+| OOM durante ricetta | Pipeline troppo pesante per 8GB | Aggiungi `--lowvram` in `app_config.comfy_vram_mode`; ComfyUI fa offload automatico |
+| Progress WebSocket non arriva | ComfyUI non raggiungibile o client_id mismatch | Verifica `client.is_alive()`; controlla porta in `logs/comfyui.log` |
+| ComfyUI orfano alla chiusura | Crash app senza cleanup | Al prossimo avvio `ComfyServer._kill_orphans()` lo termina |
+| Output immagine non trovato | File in `comfy_outputs/` ma path sbagliato | Controlla `_fetch_outputs` in `client.py` |
+| LoRA non applicato | `project.active_lora` è None o path non trovato | Verifica che il progetto abbia un training run completato |
+| `send2trash` non installato | Dipendenza opzionale mancante | `pip install send2trash`; fallback rinomina file |
 
-## Git ignore essenziale
-
-```
-.venv/
-__pycache__/
-*.pyc
-.pytest_cache/
-.ruff_cache/
-
-# Asset/dati locali
-.vforge_data/
-external/sd-scripts/
-build/
-dist/
-*.spec
-*.log
-
-# IDE
-.vscode/
-.idea/
-*.swp
-```
+---
 
 ## Convenzioni di codice
 
-- **Type hints sempre** su funzioni pubbliche
-- **Docstring** stile Google su classi e metodi pubblici (non su tutto)
 - **`from __future__ import annotations`** in cima a ogni file Python
-- **Path: solo `pathlib.Path`**, mai `os.path` o stringhe
-- **Logger named** per modulo: `logger = logging.getLogger(__name__)`, mai `print()`
-- **Qt naming**: signal `something_happened`, slot `_on_something_happened`
-- **Threading**: nessuna mutazione di Qt widget fuori dal main thread, sempre signal
+- **Type hints** su tutte le funzioni pubbliche
+- **Solo `pathlib.Path`** per i path, mai `os.path` o stringhe raw
+- **`logger = logging.getLogger(__name__)`** per modulo, mai `print()`
+- **Qt signals**: `something_happened` / slot `_on_something_happened`
+- **Threading**: mai mutare widget Qt fuori dal main thread — sempre signal
+- **Test**: `conftest.py` isola le path utente in `tmp_path` via env var
 
-## Risorse esterne utili
+---
 
-- diffusers docs: https://huggingface.co/docs/diffusers
-- sd-scripts wiki: https://github.com/kohya-ss/sd-scripts/wiki
+## Risorse esterne
+
+- ComfyUI repo: https://github.com/comfyanonymous/ComfyUI
+- ComfyUI API reference: `ComfyUI/script_examples/` nel repo
 - PyQt6 docs: https://doc.qt.io/qtforpython-6/
+- sd-scripts (training): https://github.com/kohya-ss/sd-scripts/wiki
+- LyCORIS: https://github.com/KohakuBlueleaf/LyCORIS
 - Pony V6 XL prompting guide: https://civitai.com/articles/3848
-- Real-ESRGAN: https://github.com/xinntao/Real-ESRGAN
+- IP-Adapter FaceID: https://github.com/tencent-ailab/IP-Adapter

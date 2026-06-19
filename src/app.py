@@ -8,6 +8,7 @@ import sys
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
 
+from src.core.app_config import AppConfig
 from src.utils.paths import get_app_data_dir, get_assets_dir
 
 logger = logging.getLogger(__name__)
@@ -18,11 +19,20 @@ def _setup_logging(debug: bool) -> None:
     log_dir = get_app_data_dir() / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
 
+    # Rotazione: il log non cresce all'infinito durante sessioni lunghe
+    # (5 MB × 3 backup = max ~20 MB su disco invece di un file illimitato).
+    from logging.handlers import RotatingFileHandler
+
     logging.basicConfig(
         level=level,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
-            logging.FileHandler(log_dir / "vihente-forge.log", encoding="utf-8"),
+            RotatingFileHandler(
+                log_dir / "vihente-forge.log",
+                maxBytes=5 * 1024 * 1024,
+                backupCount=3,
+                encoding="utf-8",
+            ),
             logging.StreamHandler(sys.stdout),
         ],
     )
@@ -34,7 +44,7 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--mock",
         action="store_true",
-        help="Mock pipeline (no GPU). Per sviluppo UI senza modelli.",
+        help="MockComfyClient (no GPU, no ComfyUI). Per sviluppo UI senza modelli.",
     )
     parser.add_argument(
         "--data-dir",
@@ -74,10 +84,20 @@ def run_app(argv: list[str]) -> int:
 
     _apply_stylesheet(app)
 
+    cfg = AppConfig.load()
+    logger.info(
+        "AppConfig: vram_mode=%s port=%d thermal=%s",
+        cfg.comfy_vram_mode, cfg.comfy_port, cfg.thermal_safety_enabled,
+    )
+
     # Import qui per non pagare il costo se solo --help
     from src.ui.main_window import MainWindow
 
-    window = MainWindow(mock=args.mock, skip_model_check=args.skip_model_check)
+    window = MainWindow(
+        mock=args.mock,
+        skip_model_check=args.skip_model_check,
+        app_config=cfg,
+    )
     window.show()
 
     return app.exec()

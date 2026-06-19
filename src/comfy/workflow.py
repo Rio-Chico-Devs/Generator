@@ -98,6 +98,93 @@ class WorkflowTemplate:
         self.set_param(node, spec.get("model_weight_field", "strength_model"), float(weight))
         self.set_param(node, spec.get("clip_weight_field", "strength_clip"), float(weight))
 
+    def set_loras(self, specs: list[tuple[str, float]]) -> None:
+        """Impila più LoRA fra il checkpoint e i suoi consumatori.
+
+        Il workflow ha un solo nodo LoRA (quello mappato): lo usiamo come
+        modello per costruire una catena ``checkpoint → LoRA0 → LoRA1 → …``,
+        rinstradando i consumatori (KSampler, CLIPSetLastLayer…) sull'ultimo
+        anello. ``specs`` è una lista ordinata di ``(percorso, peso)``.
+
+        Con lista vuota il nodo LoRA viene bypassato del tutto: i consumatori
+        tornano a leggere model/clip direttamente dal checkpoint.
+        """
+        spec = self.mapping.get("lora")
+        if not spec or "node" not in spec:
+            raise KeyError(
+                f"Nessun nodo LoRA mappato in {self.path.stem}.map.json"
+            )
+        head_id = spec["node"]
+        head = self.graph[head_id]
+        name_field = spec.get("name_field", "lora_name")
+        model_w_field = spec.get("model_weight_field", "strength_model")
+        clip_w_field = spec.get("clip_weight_field", "strength_clip")
+
+        # Sorgenti a monte (model/clip) che alimentavano il nodo LoRA originale.
+        up_model = head["inputs"]["model"]
+        up_clip = head["inputs"]["clip"]
+
+        if not specs:
+            # Bypass: i consumatori del nodo LoRA tornano al checkpoint.
+            self._rewire_slot(head_id, 0, up_model, exclude={head_id})
+            self._rewire_slot(head_id, 1, up_clip, exclude={head_id})
+            del self.graph[head_id]
+            return
+
+        # Il primo LoRA riusa il nodo esistente; i successivi sono cloni.
+        path0, w0 = specs[0]
+        head["inputs"][name_field] = Path(path0).name
+        head["inputs"][model_w_field] = float(w0)
+        head["inputs"][clip_w_field] = float(w0)
+        head["inputs"]["model"] = up_model
+        head["inputs"]["clip"] = up_clip
+
+        chain = [head_id]
+        prev = head_id
+        for i, (path, weight) in enumerate(specs[1:], start=1):
+            new_id = f"{head_id}_lora{i}"
+            self.graph[new_id] = {
+                "class_type": head["class_type"],
+                "inputs": {
+                    name_field: Path(path).name,
+                    model_w_field: float(weight),
+                    clip_w_field: float(weight),
+                    "model": [prev, 0],
+                    "clip": [prev, 1],
+                },
+            }
+            chain.append(new_id)
+            prev = new_id
+
+        tail = chain[-1]
+        if tail != head_id:
+            # I consumatori puntavano a head_id: spostali sulla coda della catena
+            # (senza toccare i link interni alla catena stessa).
+            self._rewire_node(head_id, tail, exclude=set(chain))
+
+    def _rewire_node(self, old_id: str, new_id: str, exclude: set[str]) -> None:
+        """Rimpiazza ogni connessione ``[old_id, k]`` con ``[new_id, k]``."""
+        for nid, node in self.graph.items():
+            if nid in exclude:
+                continue
+            for field, val in node.get("inputs", {}).items():
+                if isinstance(val, list) and len(val) == 2 and val[0] == old_id:
+                    node["inputs"][field] = [new_id, val[1]]
+
+    def _rewire_slot(self, old_id: str, slot: int, new_ref, exclude: set[str]) -> None:
+        """Rimpiazza ``[old_id, slot]`` con ``new_ref`` (un riferimento intero)."""
+        for nid, node in self.graph.items():
+            if nid in exclude:
+                continue
+            for field, val in node.get("inputs", {}).items():
+                if (
+                    isinstance(val, list)
+                    and len(val) == 2
+                    and val[0] == old_id
+                    and val[1] == slot
+                ):
+                    node["inputs"][field] = list(new_ref)
+
     # --- Output ------------------------------------------------------
 
     def build(self) -> dict[str, Any]:

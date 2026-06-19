@@ -31,3 +31,8 @@ markers = [
     "gpu: tests requiring CUDA",
 ]
 testpaths = ["tests"]
+addopts = [
+    "--junit-xml=test-results/report.xml",
+    "--tb=short",
+    "-q",
+]

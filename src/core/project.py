@@ -8,11 +8,12 @@ import json
 import logging
 import re
 import shutil
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
+from src.utils.atomic import atomic_write_text
 from src.utils.paths import get_projects_dir
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,8 @@ class Project:
     base_model: Optional[BaseModelRef] = None
     activator_tag: str = ""
     trigger_prompt_prefix: str = ""
+    # Slug del progetto genitore se questo è una variante (fork). Vuoto = radice.
+    parent_slug: str = ""
     default_negative_prompt: str = (
         "low quality, worst quality, blurry, deformed, bad anatomy"
     )
@@ -115,12 +118,42 @@ class Project:
         return self.training_dir / "runs"
 
     @property
+    def guided_dir(self) -> Path:
+        """Sessioni di training guidato (human-in-the-loop)."""
+        return self.training_dir / "guided"
+
+    @property
+    def diary_path(self) -> Path:
+        """Decision Diary append-only (JSONL) condiviso tra le sessioni guidate."""
+        return self.guided_dir / "diary.jsonl"
+
+    @property
+    def techniques_dir(self) -> Path:
+        return self.root / "techniques"
+
+    @property
+    def techniques_refs_dir(self) -> Path:
+        return self.techniques_dir / "refs"
+
+    @property
+    def technique_library_path(self) -> Path:
+        return self.techniques_dir / "library.json"
+
+    def guided_session_dir(self, session_id: str) -> Path:
+        return self.guided_dir / session_id
+
+    @property
     def generations_dir(self) -> Path:
         return self.root / "generations"
 
     @property
     def gallery_dir(self) -> Path:
         return self.root / "gallery"
+
+    @property
+    def negatives_dir(self) -> Path:
+        """Immagini 👎 scartate: riferimento negativo per il training futuro."""
+        return self.root / "negatives"
 
     @property
     def prompts_dir(self) -> Path:
@@ -157,6 +190,7 @@ class Project:
             base_model=BaseModelRef(**bm) if bm else None,
             activator_tag=data.get("activator_tag", ""),
             trigger_prompt_prefix=data.get("trigger_prompt_prefix", ""),
+            parent_slug=data.get("parent_slug", ""),
             default_negative_prompt=data.get("default_negative_prompt", ""),
             default_generation_params=GenerationDefaults(**params),
             active_lora=ActiveLora(**al) if al else None,
@@ -167,9 +201,9 @@ class Project:
 
     def save(self) -> None:
         self.updated_at = _utcnow_iso()
-        self.project_json_path.write_text(
+        atomic_write_text(
+            self.project_json_path,
             json.dumps(self.to_dict(), indent=2, ensure_ascii=False),
-            encoding="utf-8",
         )
         logger.debug("Project saved: %s", self.project_json_path)
 
@@ -212,9 +246,12 @@ class Project:
             project.dataset_processed_dir,
             project.dataset_thumbnails_dir,
             project.training_runs_dir,
+            project.guided_dir,
             project.generations_dir,
             project.gallery_dir,
+            project.negatives_dir,
             project.prompts_dir,
+            project.techniques_refs_dir,
         ):
             d.mkdir(parents=True, exist_ok=True)
 
@@ -233,6 +270,28 @@ class Project:
         project.save()
         logger.info("Project created: %s (slug=%s)", name, project.slug)
         return project
+
+    def fork(self, name: str, description: str = "") -> Project:
+        """Crea un progetto variante che eredita da questo lo stile e i parametri.
+
+        Il figlio nasce vuoto (dataset da popolare con le immagini 🔀 scelte) ma
+        eredita: modello base, prompt negativo di default, parametri di
+        generazione e il LoRA attivo come punto di partenza. Registra la
+        discendenza in ``parent_slug``. Vive nella stessa cartella progetti del
+        genitore."""
+        child = Project.create(
+            name=name,
+            description=description or f"Variante di {self.name}",
+            base_model=self.base_model,
+            parent_dir=self.root.parent,
+        )
+        child.parent_slug = self.slug
+        child.default_negative_prompt = self.default_negative_prompt
+        child.default_generation_params = replace(self.default_generation_params)
+        child.active_lora = replace(self.active_lora) if self.active_lora else None
+        child.save()
+        logger.info("Fork progetto: %s → %s", self.slug, child.slug)
+        return child
 
     @classmethod
     def load(cls, root: Path) -> Project:

@@ -1,0 +1,27 @@
+{
+  "_meta": {
+    "recipe": "correct_inpaint",
+    "phase": 5,
+    "requires_custom_nodes": [],
+    "note": "Inpainting con soli nodi core ComfyUI. La zona fuori maschera resta intatta (VAEEncodeForInpaint). 'strength' guida il denoise: basso = ritocca, alto = ridisegna."
+  },
+  "checkpoint": { "node": "4", "field": "ckpt_name" },
+  "positive_prompt": { "node": "6", "field": "text" },
+  "negative_prompt": { "node": "7", "field": "text" },
+  "seed": { "node": "3", "field": "seed" },
+  "steps": { "node": "3", "field": "steps" },
+  "cfg": { "node": "3", "field": "cfg" },
+  "sampler": { "node": "3", "field": "sampler_name" },
+  "scheduler": { "node": "3", "field": "scheduler" },
+  "denoise": { "node": "3", "field": "denoise" },
+  "strength": { "node": "3", "field": "denoise" },
+  "clip_skip": { "node": "11", "field": "stop_at_clip_layer" },
+  "image": { "node": "12" },
+  "mask": { "node": "13" },
+  "lora": {
+    "node": "10",
+    "name_field": "lora_name",
+    "model_weight_field": "strength_model",
+    "clip_weight_field": "strength_clip"
+  }
+}

@@ -1,28 +1,28 @@
 """Entry point Vihente Forge.
 
-IMPORTANTE: questo file setta variabili d'ambiente PRIMA di importare
-diffusers/torch. L'ordine conta — non spostare gli import in cima.
+IMPORTANTE: questo file setta variabili d'ambiente PRIMA di avviare
+ComfyUI e sd-scripts (i processi figli le ereditano). Non spostare
+gli import in cima.
 """
 from __future__ import annotations
 
 import os
 import sys
-from pathlib import Path
 
 
 def _bootstrap_env() -> None:
-    """Setta env vars prima di qualsiasi import pesante."""
-    # Disabilita telemetria HuggingFace
+    """Setta env vars prima di avviare qualsiasi processo figlio."""
+    # Disabilita telemetria HuggingFace (usata da ComfyUI e sd-scripts)
     os.environ.setdefault("HF_HUB_DISABLE_TELEMETRY", "1")
 
-    # Riduce frammentazione VRAM su GPU 8GB
+    # Riduce frammentazione VRAM su GPU 8GB (ereditato da ComfyUI)
     os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "max_split_size_mb:512")
 
-    # Su Windows xformers a volte ha problemi con triton
+    # Su Windows xformers/triton usati da ComfyUI possono dare problemi
     if sys.platform == "win32":
         os.environ.setdefault("XFORMERS_FORCE_DISABLE_TRITON", "1")
 
-    # HF cache dir: la mettiamo nella cartella utente unica per l'app
+    # HF cache dir condivisa tra ComfyUI e sd-scripts
     from src.utils.paths import get_models_dir
 
     models_dir = get_models_dir()
@@ -34,7 +34,16 @@ def main() -> int:
     _bootstrap_env()
 
     # Import qui, DOPO env setup
-    from src.app import run_app
+    try:
+        from src.app import run_app
+    except ImportError as e:
+        print(f"ERRORE: dipendenza mancante — {e}", file=sys.stderr)
+        print(
+            "Installa le dipendenze con:\n"
+            "    pip install -r requirements.txt",
+            file=sys.stderr,
+        )
+        return 1
 
     return run_app(sys.argv)
 

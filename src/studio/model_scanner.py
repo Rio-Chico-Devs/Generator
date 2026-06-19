@@ -18,6 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
+from src.utils.model_scan import _MAX_HEADER_BYTES
 from src.utils.paths import get_user_data_dir
 
 logger = logging.getLogger(__name__)
@@ -64,6 +65,7 @@ def ensure_studio_dirs() -> None:
 # --- Header safetensors -------------------------------------------------
 
 
+
 def read_safetensors_header(path: Path) -> dict:
     """Legge solo l'header JSON di un .safetensors (no caricamento pesi).
 
@@ -74,6 +76,12 @@ def read_safetensors_header(path: Path) -> dict:
         if len(length_bytes) < 8:
             return {}
         header_len = struct.unpack("<Q", length_bytes)[0]
+        if header_len <= 0 or header_len > _MAX_HEADER_BYTES:
+            logger.warning(
+                "Header safetensors anomalo in %s: %d byte (cap %d) — ignorato",
+                path.name, header_len, _MAX_HEADER_BYTES,
+            )
+            return {}
         header_bytes = f.read(header_len)
     try:
         return json.loads(header_bytes)

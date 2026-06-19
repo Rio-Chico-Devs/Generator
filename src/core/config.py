@@ -29,7 +29,7 @@ class GenerationConfig:
     # Sampler
     steps: int = 30
     cfg_scale: float = 7.0
-    sampler: str = "dpmpp_2m_karras"  # ID interno mappato a scheduler diffusers
+    sampler: str = "dpmpp_2m_karras"  # nome sampler ComfyUI
     seed: int = -1  # -1 = random
 
     # Batch
@@ -52,16 +52,3 @@ class GenerationConfig:
     # Metadata extra
     project_slug: str = ""
     activator_tag: str = ""
-
-
-@dataclass
-class GenerationResult:
-    """Risultato di una generazione, da serializzare in sidecar JSON."""
-
-    image_path: str
-    config: GenerationConfig
-    actual_seed: int
-    generation_time_sec: float
-    model_hash: str = ""
-    app_version: str = "0.1.0"
-    created_at: str = ""

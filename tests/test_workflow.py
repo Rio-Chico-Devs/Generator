@@ -87,3 +87,89 @@ def test_unknown_node_raises():
     except KeyError:
         raised = True
     assert raised
+
+
+# ---------------------------------------------------------------------------
+# set_loras — stacking di più LoRA
+# ---------------------------------------------------------------------------
+
+
+def _lora_node_id(wf: WorkflowTemplate) -> str:
+    return wf.mapping["lora"]["node"]
+
+
+def _count_lora_nodes(wf: WorkflowTemplate) -> int:
+    return sum(1 for n in wf.graph.values() if n["class_type"] == "LoraLoader")
+
+
+def test_set_loras_single_reuses_head_node():
+    wf = WorkflowTemplate(_base_path())
+    wf.set_loras([("/d/Style.safetensors", 0.9)])
+    head = _lora_node_id(wf)
+    assert _count_lora_nodes(wf) == 1
+    assert wf.get_param(head, "lora_name") == "Style.safetensors"
+    assert wf.get_param(head, "strength_model") == 0.9
+    assert wf.get_param(head, "strength_clip") == 0.9
+
+
+def test_set_loras_stacks_three_in_order():
+    wf = WorkflowTemplate(_base_path())
+    head = _lora_node_id(wf)
+    specs = [
+        ("/d/A.safetensors", 0.8),
+        ("/d/B.safetensors", 0.6),
+        ("/d/C.safetensors", 0.4),
+    ]
+    wf.set_loras(specs)
+    assert _count_lora_nodes(wf) == 3
+
+    # Il primo è il nodo head, alimentato dal checkpoint (nodo "4").
+    assert wf.get_param(head, "lora_name") == "A.safetensors"
+    assert wf.get_param(head, "model") == ["4", 0]
+    assert wf.get_param(head, "clip") == ["4", 1]
+
+    # I due cloni leggono dal precedente.
+    b_id = f"{head}_lora1"
+    c_id = f"{head}_lora2"
+    assert wf.get_param(b_id, "lora_name") == "B.safetensors"
+    assert wf.get_param(b_id, "model") == [head, 0]
+    assert wf.get_param(c_id, "lora_name") == "C.safetensors"
+    assert wf.get_param(c_id, "model") == [b_id, 0]
+
+
+def test_set_loras_rewires_consumers_to_tail():
+    wf = WorkflowTemplate(_base_path())
+    head = _lora_node_id(wf)
+    wf.set_loras([("/d/A.safetensors", 0.8), ("/d/B.safetensors", 0.6)])
+    tail = f"{head}_lora1"
+    # KSampler (nodo "3") legge il model dalla coda della catena.
+    assert wf.get_param("3", "model") == [tail, 0]
+    # CLIPSetLastLayer (nodo "11") legge il clip dalla coda.
+    assert wf.get_param("11", "clip") == [tail, 1]
+
+
+def test_set_loras_empty_bypasses_node():
+    wf = WorkflowTemplate(_base_path())
+    head = _lora_node_id(wf)
+    wf.set_loras([])
+    assert _count_lora_nodes(wf) == 0
+    assert head not in wf.graph
+    # I consumatori tornano a leggere dal checkpoint (nodo "4").
+    assert wf.get_param("3", "model") == ["4", 0]
+    assert wf.get_param("11", "clip") == ["4", 1]
+
+
+def test_set_loras_uses_basename():
+    wf = WorkflowTemplate(_base_path())
+    wf.set_loras([("/long/abs/path/Hero.safetensors", 1.0)])
+    head = _lora_node_id(wf)
+    assert wf.get_param(head, "lora_name") == "Hero.safetensors"
+
+
+def test_set_loras_build_is_independent():
+    wf = WorkflowTemplate(_base_path())
+    wf.set_loras([("/d/A.safetensors", 0.8), ("/d/B.safetensors", 0.6)])
+    built = wf.build()
+    # build() è un deepcopy: contiene la catena completa.
+    head = _lora_node_id(wf)
+    assert f"{head}_lora1" in built

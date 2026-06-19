@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "recipe": "product_in_scene",
+    "phase": 4,
+    "requires_custom_nodes": [
+      "ComfyUI-BiRefNet (nodo RembgByBiRefNet o equivalente: rimozione sfondo -> IMAGE + MASK)"
+    ],
+    "validate_on_real_comfy": true,
+    "status": "v1: scena SDXL + ritaglio prodotto (BiRefNet) + composite mascherato.",
+    "roadmap": [
+      "IC-Light: re-illuminazione del prodotto per integrarlo nella scena (il modello ic-light è già nel catalogo, manca lo stadio nel grafo)",
+      "Posizionamento intelligente del prodotto (ora x=0,y=0 in alto a sinistra)",
+      "Overlay testo titolo/sottotitolo e formati template (banner/story/...)"
+    ],
+    "note": "Il class_type del nodo BiRefNet cambia tra i fork: verificare contro l'installazione reale. La descrizione scena arriva da 'scene_prompt' (gestito dal worker)."
+  },
+  "checkpoint": { "node": "4", "field": "ckpt_name" },
+  "positive_prompt": { "node": "6", "field": "text" },
+  "negative_prompt": { "node": "7", "field": "text" },
+  "seed": { "node": "3", "field": "seed" },
+  "steps": { "node": "3", "field": "steps" },
+  "cfg": { "node": "3", "field": "cfg" },
+  "sampler": { "node": "3", "field": "sampler_name" },
+  "scheduler": { "node": "3", "field": "scheduler" },
+  "denoise": { "node": "3", "field": "denoise" },
+  "clip_skip": { "node": "11", "field": "stop_at_clip_layer" },
+  "width": { "node": "5", "field": "width" },
+  "height": { "node": "5", "field": "height" },
+  "product": { "node": "20" },
+  "lora": {
+    "node": "10",
+    "name_field": "lora_name",
+    "model_weight_field": "strength_model",
+    "clip_weight_field": "strength_clip"
+  }
+}
