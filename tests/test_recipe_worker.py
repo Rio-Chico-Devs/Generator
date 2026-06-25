@@ -143,7 +143,7 @@ class TestParametrize:
         assert base_wf.get_param(cs["node"], cs["field"]) == -2
 
     def test_record_captures_effective_params(self, base_wf, project_with_lora):
-        rec = _parametrize(
+        rec, _ = _parametrize(
             base_wf,
             RECIPES[RecipeId.BASE],
             {"prompt": "x", "seed": 123},
@@ -298,7 +298,7 @@ class TestCopyToComfyInput:
         src.write_bytes(b"\x89PNG\r\n")
         comfy_in = tmp_path / "comfy_input"
 
-        name = _copy_to_comfy_input(src, comfy_in)
+        name, _ = _copy_to_comfy_input(src, comfy_in)
 
         assert (comfy_in / name).exists()
         assert (comfy_in / name).read_bytes() == b"\x89PNG\r\n"
@@ -316,7 +316,7 @@ class TestCopyToComfyInput:
     def test_copy_preserves_extension(self, tmp_path):
         src = tmp_path / "ref.jpg"
         src.write_bytes(b"\xff\xd8")
-        name = _copy_to_comfy_input(src, tmp_path / "ci")
+        name, _ = _copy_to_comfy_input(src, tmp_path / "ci")
         assert name.endswith(".jpg")
 
     def test_copy_creates_dest_dir_if_missing(self, tmp_path):
