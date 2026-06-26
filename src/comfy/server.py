@@ -20,6 +20,18 @@ from src.utils.paths import get_app_data_dir, get_user_data_dir
 logger = logging.getLogger(__name__)
 
 
+# Profili VRAM → flag CLI di ComfyUI. "normalvram" (default storico della
+# nostra config) e "normal" non hanno più un flag dedicato: il profilo
+# bilanciato è semplicemente l'assenza di flag. Mappiamo solo quelli reali.
+_VRAM_FLAGS: dict[str, str] = {
+    "lowvram": "--lowvram",
+    "novram": "--novram",
+    "highvram": "--highvram",
+    "gpu-only": "--gpu-only",
+    "cpu": "--cpu",
+}
+
+
 def find_free_port(start: int = 8188, attempts: int = 20) -> int:
     """Trova una porta libera a partire da `start`."""
     for offset in range(attempts):
@@ -78,9 +90,14 @@ class ComfyServer:
             "--listen", "127.0.0.1",
             "--port", str(self.port),
             "--disable-auto-launch",
-            f"--{self.vram_mode}",
             "--use-pytorch-cross-attention",
         ]
+        # ComfyUI ha rimosso --normalvram: il profilo "normale" è l'assenza
+        # di flag. Passiamo un flag SOLO per i profili che ne hanno ancora uno
+        # (low/no/high vram, gpu-only, cpu); "normalvram"/"normal"/"" → default.
+        vram_flag = _VRAM_FLAGS.get(self.vram_mode)
+        if vram_flag:
+            cmd.append(vram_flag)
         logger.info("Avvio ComfyUI: %s (porta %d)", " ".join(cmd), self.port)
 
         self._proc = subprocess.Popen(
