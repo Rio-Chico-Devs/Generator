@@ -15,7 +15,7 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from src.utils.paths import get_app_data_dir, get_user_data_dir
+from src.utils.paths import get_app_data_dir, get_models_dir, get_user_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +84,8 @@ class ComfyServer:
         log_dir.mkdir(parents=True, exist_ok=True)
         self._log_file = open(log_dir / "comfyui.log", "w", encoding="utf-8")
 
+        extra_paths_config = self._write_extra_model_paths_config()
+
         cmd = [
             sys.executable,
             "main.py",
@@ -91,6 +93,7 @@ class ComfyServer:
             "--port", str(self.port),
             "--disable-auto-launch",
             "--use-pytorch-cross-attention",
+            "--extra-model-paths-config", str(extra_paths_config),
         ]
         # ComfyUI ha rimosso --normalvram: il profilo "normale" è l'assenza
         # di flag. Passiamo un flag SOLO per i profili che ne hanno ancora uno
@@ -147,6 +150,29 @@ class ComfyServer:
                 return True
             time.sleep(1.0)
         return False
+
+    def _write_extra_model_paths_config(self) -> Path:
+        """Scrive il config YAML che fa vedere a ComfyUI i modelli "ufficiali"
+        di Vihente Forge (in ``VFORGE_DATA_DIR/models/``), in aggiunta alla sua
+        cartella nativa ``ComfyUI/models/``. Niente symlink/junction: ComfyUI
+        supporta nativamente più root via ``--extra-model-paths-config``, ed
+        è l'unico approccio che non richiede privilegi admin su Windows.
+        """
+        models_dir = get_models_dir()
+        for sub in ("checkpoints", "loras", "vae"):
+            (models_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        config_path = get_app_data_dir() / "comfy_extra_model_paths.yaml"
+        base_path = models_dir.resolve().as_posix()
+        config_path.write_text(
+            "vihente_forge:\n"
+            f"    base_path: {base_path}\n"
+            "    checkpoints: checkpoints\n"
+            "    loras: loras\n"
+            "    vae: vae\n",
+            encoding="utf-8",
+        )
+        return config_path
 
     def _kill_orphans(self) -> None:
         """Termina processi ComfyUI orfani (da crash precedenti)."""
