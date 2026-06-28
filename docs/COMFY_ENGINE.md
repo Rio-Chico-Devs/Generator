@@ -48,7 +48,8 @@ Gestito da `src/comfy/server.py`:
 [AVVIO APP]
   1. Trova porta libera (default 8188, fallback incrementale)
   2. Lancia subprocess ComfyUI con flag corretti
-  3. Poll health endpoint finché risponde (timeout 60s)
+  3. Poll health endpoint finché risponde (timeout 180s: il primo
+     avvio a freddo di ComfyUI 0.26+ con tutti i plugin è lento)
   4. Se non risponde: errore chiaro all'utente, app degrada
      a sola gestione progetti/dataset (no generazione)
 

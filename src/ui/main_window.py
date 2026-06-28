@@ -82,7 +82,7 @@ class _GpuPoller(QThread):
 
 
 class _ComfyStarter(QThread):
-    """Avvia ComfyUI in background — start() blocca fino a ~60s.
+    """Avvia ComfyUI in background — start() blocca fino a ~180s.
 
     Il risultato arriva via signal nel main thread (thread-safe).
     """

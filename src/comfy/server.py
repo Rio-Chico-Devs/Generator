@@ -68,7 +68,7 @@ class ComfyServer:
     def is_installed(self) -> bool:
         return (self.comfy_dir / "main.py").exists()
 
-    def start(self, timeout: float = 60.0) -> int:
+    def start(self, timeout: float = 180.0) -> int:
         """Avvia ComfyUI, attende che risponda, ritorna la porta."""
         if not self.is_installed():
             raise RuntimeError(
