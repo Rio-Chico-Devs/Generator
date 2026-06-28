@@ -469,6 +469,8 @@ class MainWindow(QMainWindow):
         gv = getattr(self, "_generate_view", None)
         if gv is not None:
             gv.set_comfy_client(self._comfy_client)
+            if self._comfy_server is not None:
+                gv.set_comfy_input_dir(self._comfy_server.input_dir)
         guided = getattr(self, "_guided_view", None)
         if guided is not None:
             guided.set_comfy_client(self._comfy_client)

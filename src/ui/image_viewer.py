@@ -110,10 +110,18 @@ def show_image(path: Path, parent=None) -> None:
 # --- Menu contestuale -----------------------------------------------------
 
 
-def build_image_menu(parent, path: Path) -> QMenu:
-    """Costruisce un menu con le azioni standard su un'immagine."""
+def build_image_menu(parent, path: Path, extra_actions=None) -> QMenu:
+    """Costruisce un menu con le azioni standard su un'immagine.
+
+    ``extra_actions`` è una lista opzionale di ``(etichetta, callback)`` che
+    vengono messe in cima al menu (es. "Migliora ✨" dalla GenerateView).
+    """
     p = Path(path)
     menu = QMenu(parent)
+    for label, callback in (extra_actions or []):
+        menu.addAction(label, callback)
+    if extra_actions:
+        menu.addSeparator()
     menu.addAction("Apri a tutto schermo", lambda: show_image(p, parent))
     menu.addSeparator()
     menu.addAction("Salva con nome…", lambda: save_image_as(parent, p))

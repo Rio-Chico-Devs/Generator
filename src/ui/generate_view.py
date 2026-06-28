@@ -189,9 +189,10 @@ class _LoraSlot(QWidget):
 class _ClickableThumb(QLabel):
     """Miniatura cliccabile: click sinistro apre il visore, destro il menu."""
 
-    def __init__(self, path: Path, parent=None) -> None:
+    def __init__(self, path: Path, on_refine=None, parent=None) -> None:
         super().__init__(parent)
         self._path = path
+        self._on_refine = on_refine
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_menu)
@@ -202,14 +203,20 @@ class _ClickableThumb(QLabel):
         super().mousePressEvent(event)
 
     def _on_menu(self, pos) -> None:
-        build_image_menu(self.window(), self._path).exec(self.mapToGlobal(pos))
+        extra = None
+        if self._on_refine is not None:
+            extra = [("Migliora ✨ (Hires)", lambda: self._on_refine(self._path))]
+        build_image_menu(self.window(), self._path, extra_actions=extra).exec(
+            self.mapToGlobal(pos)
+        )
 
 
 class _ResultGallery(QWidget):
     """Griglia scrollabile di thumbnail dei risultati."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, on_refine=None, parent=None) -> None:
         super().__init__(parent)
+        self._on_refine = on_refine
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -232,7 +239,7 @@ class _ResultGallery(QWidget):
         self._count = 0
 
     def add_image(self, path: Path) -> None:
-        label = _ClickableThumb(path)
+        label = _ClickableThumb(path, on_refine=self._on_refine)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setFixedSize(_THUMB_W, _THUMB_W)
         label.setStyleSheet("border: 1px solid #2a2d36; border-radius: 4px;")
@@ -268,6 +275,7 @@ class GenerateView(QWidget):
         self._worker = None
         self._safety = None
         self._gpu_read_fn = None
+        self._comfy_input_dir: Optional[Path] = None
         self._pending_per_image = 0.0
         self._seed_locked = False
         self._last_used_seed: Optional[int] = None
@@ -308,7 +316,7 @@ class GenerateView(QWidget):
         self.status_label.setStyleSheet("color: #8a8d96;")
         right.addWidget(self.status_label)
 
-        self.gallery = _ResultGallery()
+        self.gallery = _ResultGallery(on_refine=self.refine_image)
         right.addWidget(self.gallery, 1)
         root.addLayout(right, 1)
 
@@ -579,6 +587,11 @@ class GenerateView(QWidget):
         self._client = client
         self._update_generate_enabled()
 
+    def set_comfy_input_dir(self, path) -> None:
+        """Cartella input di ComfyUI: serve per il refine (img2img), che vi
+        copia l'immagine sorgente prima di rigenerarla."""
+        self._comfy_input_dir = Path(path) if path is not None else None
+
     def set_wallet(self, wallet: CreditWallet) -> None:
         self._wallet = wallet
         self._update_balance_label()
@@ -761,24 +774,113 @@ class GenerateView(QWidget):
             )
             return
 
-        self._pending_per_image = breakdown.per_image
-        self._last_used_seed = None  # reset: cattura il seed della nuova generazione
-        self.gallery.clear()
+        self._launch_worker(
+            recipe=get_recipe(RecipeId.BASE),
+            user_params=form.to_user_params(),
+            per_image_cost=breakdown.per_image,
+            status_text="Generazione in corso…",
+            clear_gallery=True,
+            reset_seed_capture=True,
+        )
+
+    def refine_image(self, path: Path) -> None:
+        """Esegue un passaggio Hires (img2img a bassa denoise) su un'immagine
+        già generata: la ingrandisce e ne rifinisce il dettaglio."""
+        if self._project is None or self._client is None or self._wallet is None:
+            return
+        if self._worker is not None:
+            QMessageBox.information(
+                self, "Generazione in corso",
+                "Aspetta che finisca la generazione attuale prima di migliorare.",
+            )
+            return
+        if self._comfy_input_dir is None:
+            QMessageBox.warning(
+                self, "Motore non pronto",
+                "Il refine richiede ComfyUI attivo. Riprova quando il motore è pronto.",
+            )
+            return
+        src = Path(path)
+        if not src.exists():
+            QMessageBox.warning(self, "File assente", f"Immagine non trovata:\n{src}")
+            return
+
+        # Recupera prompt/negativo originali dal sidecar, così il refine resta
+        # coerente con l'immagine di partenza. Se manca, procede senza prompt.
+        positive = ""
+        negative = "low quality, worst quality, blurry"
+        try:
+            from src.core.gallery import load_sidecar
+            sc = load_sidecar(src)
+            positive = str(sc.get("positive", "") or "")
+            negative = str(sc.get("negative", "") or negative)
+        except Exception:
+            pass
+
+        # Riusa la selezione LoRA corrente del form (es. enhancer2 se attivo).
+        extra_loras = tuple(
+            spec for s in self.lora_slots if (spec := s.spec()) is not None
+        )
+        user_params = {
+            "image": str(src),
+            "prompt": positive,
+            "negative": negative,
+            "scale_by": 1.5,
+            "denoise": 0.4,
+            "seed": -1,
+            "lora_weight": extra_loras[0][1] if extra_loras else 0.85,
+            "loras": [
+                {"path": p, "weight": float(w)} for p, w in extra_loras
+            ],
+        }
+        # Costo: stima approssimata riusando il form corrente (wallet gamificato).
+        per_image = self._collect_form().estimate().per_image
+        if not self._wallet.can_afford(per_image):
+            QMessageBox.warning(
+                self, "Crediti insufficienti",
+                f"Servono {per_image:.2f} crediti, disponibili {self._wallet.balance:.2f}.",
+            )
+            return
+
+        self._launch_worker(
+            recipe=get_recipe(RecipeId.REFINE),
+            user_params=user_params,
+            per_image_cost=per_image,
+            status_text="Miglioramento (Hires) in corso…",
+            clear_gallery=False,   # tieni l'originale visibile per il confronto
+            reset_seed_capture=False,
+        )
+
+    def _launch_worker(
+        self,
+        recipe,
+        user_params: dict,
+        per_image_cost: float,
+        status_text: str,
+        clear_gallery: bool,
+        reset_seed_capture: bool,
+    ) -> None:
+        """Avvia un RecipeWorker e aggancia i segnali (condiviso tra generazione
+        e refine)."""
+        self._pending_per_image = per_image_cost
+        if reset_seed_capture:
+            self._last_used_seed = None
+        if clear_gallery:
+            self.gallery.clear()
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # indeterminato finché non arriva il primo step
         self.cancel_btn.setVisible(True)
-        self.status_label.setText("Generazione in corso…")
+        self.status_label.setText(status_text)
 
         from src.workers.recipe_worker import RecipeWorker
 
-        recipe = get_recipe(RecipeId.BASE)
         self._worker = RecipeWorker(
             recipe=recipe,
-            user_params=form.to_user_params(),
+            user_params=user_params,
             project=self._project,
             client=self._client,
             output_dir=self._project.gallery_dir,
-            comfy_input_dir=None,
+            comfy_input_dir=self._comfy_input_dir,
             safety=self._safety,
             gpu_read_fn=self._gpu_read_fn,
             parent=self,
