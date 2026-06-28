@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
@@ -189,10 +190,11 @@ class _LoraSlot(QWidget):
 class _ClickableThumb(QLabel):
     """Miniatura cliccabile: click sinistro apre il visore, destro il menu."""
 
-    def __init__(self, path: Path, on_refine=None, parent=None) -> None:
+    def __init__(self, path: Path, on_refine=None, on_inpaint=None, parent=None) -> None:
         super().__init__(parent)
         self._path = path
         self._on_refine = on_refine
+        self._on_inpaint = on_inpaint
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._on_menu)
@@ -203,10 +205,12 @@ class _ClickableThumb(QLabel):
         super().mousePressEvent(event)
 
     def _on_menu(self, pos) -> None:
-        extra = None
+        extra = []
         if self._on_refine is not None:
-            extra = [("Migliora ✨ (Hires)", lambda: self._on_refine(self._path))]
-        build_image_menu(self.window(), self._path, extra_actions=extra).exec(
+            extra.append(("Migliora ✨ (Hires)", lambda: self._on_refine(self._path)))
+        if self._on_inpaint is not None:
+            extra.append(("Correggi zona ✏️", lambda: self._on_inpaint(self._path)))
+        build_image_menu(self.window(), self._path, extra_actions=extra or None).exec(
             self.mapToGlobal(pos)
         )
 
@@ -214,9 +218,10 @@ class _ClickableThumb(QLabel):
 class _ResultGallery(QWidget):
     """Griglia scrollabile di thumbnail dei risultati."""
 
-    def __init__(self, on_refine=None, parent=None) -> None:
+    def __init__(self, on_refine=None, on_inpaint=None, parent=None) -> None:
         super().__init__(parent)
         self._on_refine = on_refine
+        self._on_inpaint = on_inpaint
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -239,7 +244,9 @@ class _ResultGallery(QWidget):
         self._count = 0
 
     def add_image(self, path: Path) -> None:
-        label = _ClickableThumb(path, on_refine=self._on_refine)
+        label = _ClickableThumb(
+            path, on_refine=self._on_refine, on_inpaint=self._on_inpaint
+        )
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setFixedSize(_THUMB_W, _THUMB_W)
         label.setStyleSheet("border: 1px solid #2a2d36; border-radius: 4px;")
@@ -316,7 +323,9 @@ class GenerateView(QWidget):
         self.status_label.setStyleSheet("color: #8a8d96;")
         right.addWidget(self.status_label)
 
-        self.gallery = _ResultGallery(on_refine=self.refine_image)
+        self.gallery = _ResultGallery(
+            on_refine=self.refine_image, on_inpaint=self.inpaint_image
+        )
         right.addWidget(self.gallery, 1)
         root.addLayout(right, 1)
 
@@ -848,6 +857,64 @@ class GenerateView(QWidget):
             per_image_cost=per_image,
             status_text="Miglioramento (Hires) in corso…",
             clear_gallery=False,   # tieni l'originale visibile per il confronto
+            reset_seed_capture=False,
+        )
+
+    def inpaint_image(self, path: Path) -> None:
+        """Apre il dialog di inpainting su un'immagine e rigenera solo la zona
+        mascherata (ricetta correct_inpaint, soli nodi core)."""
+        if self._project is None or self._client is None or self._wallet is None:
+            return
+        if self._worker is not None:
+            QMessageBox.information(
+                self, "Generazione in corso",
+                "Aspetta che finisca la generazione attuale prima di correggere.",
+            )
+            return
+        if self._comfy_input_dir is None:
+            QMessageBox.warning(
+                self, "Motore non pronto",
+                "La correzione richiede ComfyUI attivo. Riprova quando il motore è pronto.",
+            )
+            return
+        src = Path(path)
+        if not src.exists():
+            QMessageBox.warning(self, "File assente", f"Immagine non trovata:\n{src}")
+            return
+
+        from src.ui.inpaint_dialog import InpaintDialog
+        dlg = InpaintDialog(src, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.mask_path is None:
+            return
+
+        extra_loras = tuple(
+            spec for s in self.lora_slots if (spec := s.spec()) is not None
+        )
+        user_params = {
+            "image": str(src),
+            "mask": str(dlg.mask_path),
+            "prompt": dlg.prompt,
+            "negative": "low quality, worst quality, blurry, jpeg artifacts",
+            "strength": dlg.strength,
+            "variants": 1,
+            "seed": -1,
+            "lora_weight": extra_loras[0][1] if extra_loras else 0.85,
+            "loras": [{"path": p, "weight": float(w)} for p, w in extra_loras],
+        }
+        per_image = self._collect_form().estimate().per_image
+        if not self._wallet.can_afford(per_image):
+            QMessageBox.warning(
+                self, "Crediti insufficienti",
+                f"Servono {per_image:.2f} crediti, disponibili {self._wallet.balance:.2f}.",
+            )
+            return
+
+        self._launch_worker(
+            recipe=get_recipe(RecipeId.CORRECT),
+            user_params=user_params,
+            per_image_cost=per_image,
+            status_text="Correzione in corso…",
+            clear_gallery=False,
             reset_seed_capture=False,
         )
 
