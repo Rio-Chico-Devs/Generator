@@ -202,10 +202,33 @@ def sdscripts_launch_cmd(
     if not script.exists():
         return []
 
+    # sd-scripts vive in un venv DEDICATO (le sue dipendenze romperebbero
+    # quelle di ComfyUI nel venv principale). Usiamo l'accelerate di quel venv
+    # se presente; altrimenti ci affidiamo al PATH.
+    accelerate = _sdscripts_accelerate(sdscripts_dir)
+
     return [
-        "accelerate",
+        accelerate,
         "launch",
         "--num_cpu_threads_per_process", "2",
         str(script),
         "--config_file", str(config_path),
     ]
+
+
+def _sdscripts_accelerate(sdscripts_dir: Path) -> str:
+    """Percorso dell'eseguibile ``accelerate`` del venv dedicato di sd-scripts.
+
+    Cerca un venv (``.venv`` o ``.venv-sdscripts``) dentro sdscripts_dir; se
+    non lo trova, ritorna ``"accelerate"`` (risolto via PATH)."""
+    import sys
+
+    for venv in (sdscripts_dir / ".venv", sdscripts_dir / ".venv-sdscripts"):
+        exe = (
+            venv / "Scripts" / "accelerate.exe"
+            if sys.platform == "win32"
+            else venv / "bin" / "accelerate"
+        )
+        if exe.exists():
+            return str(exe)
+    return "accelerate"
