@@ -102,14 +102,27 @@ class _Thumb(QToolButton):
                 )
             )
         self._base_name = item.name if len(item.name) <= 20 else item.name[:18] + "…"
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_menu)
         self.apply_rating_style()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        from src.ui.image_viewer import show_image
+        show_image(self.item.path, self.window())
+
+    def _on_menu(self, pos) -> None:
+        from src.ui.image_viewer import build_image_menu
+        build_image_menu(self.window(), self.item.path).exec(self.mapToGlobal(pos))
 
     def apply_rating_style(self) -> None:
         """Riflette il giudizio corrente di ``self.item`` su bordo, testo e tooltip."""
         rating = self.item.rating
         emoji = _RATING_EMOJI.get(rating, "")
         self.setText(f"{emoji} {self._base_name}" if emoji else self._base_name)
-        self.setToolTip(self.item.caption())
+        self.setToolTip(
+            self.item.caption()
+            + "\n\nDoppio click: ingrandisci · Tasto destro: opzioni"
+        )
         color = _RATING_BORDER.get(rating)
         border = f"border: 2px solid {color}; border-radius: 6px;" if color else ""
         self.setStyleSheet(

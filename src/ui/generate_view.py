@@ -56,6 +56,7 @@ from src.core.generation_form import (
 )
 from src.core.project import Project
 from src.core.recipes import RecipeId, get_recipe
+from src.ui.image_viewer import build_image_menu, show_image
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,21 @@ def _as_float(value) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _default_lora_dir() -> str:
+    """Cartella iniziale del file picker LoRA: la loras/ ufficiale se esiste,
+    poi quella nativa di ComfyUI, altrimenti stringa vuota (cwd)."""
+    from src.utils.paths import get_models_dir, get_user_data_dir
+
+    candidates = (
+        get_models_dir() / "loras",
+        get_user_data_dir() / "engine" / "ComfyUI" / "models" / "loras",
+    )
+    for d in candidates:
+        if d.exists():
+            return str(d)
+    return ""
 
 
 class _LoraSlot(QWidget):
@@ -124,7 +140,7 @@ class _LoraSlot(QWidget):
 
     def _on_browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Scegli LoRA", "",
+            self, "Scegli LoRA", _default_lora_dir(),
             "Modelli (*.safetensors *.pt *.ckpt *.bin *.pth)",
         )
         if not path:
@@ -170,6 +186,25 @@ class _LoraSlot(QWidget):
         return None
 
 
+class _ClickableThumb(QLabel):
+    """Miniatura cliccabile: click sinistro apre il visore, destro il menu."""
+
+    def __init__(self, path: Path, parent=None) -> None:
+        super().__init__(parent)
+        self._path = path
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_menu)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton:
+            show_image(self._path, self.window())
+        super().mousePressEvent(event)
+
+    def _on_menu(self, pos) -> None:
+        build_image_menu(self.window(), self._path).exec(self.mapToGlobal(pos))
+
+
 class _ResultGallery(QWidget):
     """Griglia scrollabile di thumbnail dei risultati."""
 
@@ -197,7 +232,7 @@ class _ResultGallery(QWidget):
         self._count = 0
 
     def add_image(self, path: Path) -> None:
-        label = QLabel()
+        label = _ClickableThumb(path)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setFixedSize(_THUMB_W, _THUMB_W)
         label.setStyleSheet("border: 1px solid #2a2d36; border-radius: 4px;")
@@ -212,7 +247,7 @@ class _ResultGallery(QWidget):
             )
         else:
             label.setText(path.name)
-        label.setToolTip(str(path))
+        label.setToolTip("Click per ingrandire · tasto destro per le opzioni")
         r, c = divmod(self._count, _GALLERY_COLS)
         self._grid.addWidget(label, r, c)
         self._count += 1
