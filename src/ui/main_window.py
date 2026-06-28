@@ -570,14 +570,26 @@ class MainWindow(QMainWindow):
 
     def _maybe_show_first_run_dialog(self) -> None:
         """Wizard primo avvio: download modelli base."""
-        from src.utils.paths import get_models_dir
+        from src.utils.paths import get_models_dir, get_user_data_dir
 
         models_dir = get_models_dir()
-        has_any_model = (
-            models_dir.exists()
-            and any((models_dir / "base").glob("*/model_index.json"))
-            if (models_dir / "base").exists()
-            else False
+        # Riconosce un modello base se presente in QUALSIASI delle forme usate:
+        # - diffusers (cartella con model_index.json) sotto models/base/
+        # - checkpoint single-file .safetensors sotto models/checkpoints/
+        #   (la root "ufficiale" vista da ComfyUI via extra_model_paths)
+        # - checkpoint single-file dentro la cartella nativa di ComfyUI
+        comfy_ckpts = (
+            get_user_data_dir() / "engine" / "ComfyUI" / "models" / "checkpoints"
+        )
+        has_any_model = any(
+            (
+                (models_dir / "base").exists()
+                and any((models_dir / "base").glob("*/model_index.json")),
+                (models_dir / "checkpoints").exists()
+                and any((models_dir / "checkpoints").glob("*.safetensors")),
+                comfy_ckpts.exists()
+                and any(comfy_ckpts.glob("*.safetensors")),
+            )
         )
         if has_any_model:
             return
