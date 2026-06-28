@@ -365,6 +365,7 @@ class GenerateView(QWidget):
         from src.core.catalog import CATALOG
         for entry in CATALOG.values():
             self.model_combo.addItem(entry.name, entry.id)
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         row.addWidget(self.model_combo, 1)
         v.addLayout(row)
 
@@ -586,11 +587,43 @@ class GenerateView(QWidget):
             if project.base_model is not None:
                 idx = self.model_combo.findData(project.base_model.id)
                 if idx >= 0:
+                    # Sync programmatico: non deve riscrivere il progetto.
+                    self.model_combo.blockSignals(True)
                     self.model_combo.setCurrentIndex(idx)
+                    self.model_combo.blockSignals(False)
             d = project.default_generation_params
             self.steps_spin.setValue(d.steps)
             self.cfg_spin.setValue(d.cfg_scale)
         self._update_generate_enabled()
+
+    def _on_model_changed(self, _index: int) -> None:
+        """L'utente ha scelto un altro modello base: aggiorna e salva il
+        progetto, così la generazione usa davvero il modello selezionato."""
+        self._sync_model_to_project()
+
+    def _sync_model_to_project(self) -> None:
+        """Allinea il modello base del progetto a quello mostrato nel menu.
+
+        Garantisce che il modello USATO sia sempre quello che l'utente VEDE
+        selezionato, anche per un progetto creato senza scegliere il modello."""
+        if self._project is None:
+            return
+        model_id = self.model_combo.currentData()
+        if not model_id:
+            return
+        from src.core.catalog import CATALOG
+        from src.core.project import BaseModelRef
+        entry = CATALOG.get(model_id)
+        if entry is None:
+            return
+        current = self._project.base_model
+        if current is not None and current.id == model_id:
+            return  # già allineato, niente da salvare
+        self._project.base_model = BaseModelRef(id=model_id, name=entry.name)
+        try:
+            self._project.save()
+        except Exception:
+            logger.warning("Salvataggio modello base del progetto fallito", exc_info=True)
 
     def set_comfy_client(self, client) -> None:
         self._client = client
@@ -770,6 +803,8 @@ class GenerateView(QWidget):
     def _on_generate(self, batch_override: Optional[int] = None) -> None:
         if self._project is None or self._client is None or self._wallet is None:
             return
+        # Il modello usato deve essere quello selezionato nel menu "Base".
+        self._sync_model_to_project()
         form = self._collect_form()
         if batch_override is not None:
             form.batch = batch_override
