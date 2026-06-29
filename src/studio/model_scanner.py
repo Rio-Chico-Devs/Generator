@@ -158,6 +158,45 @@ def extract_lora_metadata(header: dict) -> tuple[list[str], str]:
     return triggers[:5], base_hint
 
 
+def suggested_tags(header: dict, limit: int = 24) -> list[str]:
+    """Tag di training più frequenti di una LoRA, da proporre come prompt.
+
+    Aggrega ``ss_tag_frequency`` su tutti i dataset, somma le frequenze e
+    ritorna i ``limit`` tag più frequenti (deduplicati, ordine decrescente).
+    Sono i "trigger word"/concetti che la LoRA ha imparato.
+    """
+    meta = header.get("__metadata__", {})
+    raw = meta.get("ss_tag_frequency", "")
+    if not raw:
+        return []
+    try:
+        freq = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+    agg: dict[str, int] = {}
+    for _ds, tags in freq.items():
+        if not isinstance(tags, dict):
+            continue
+        for tag, count in tags.items():
+            t = str(tag).strip()
+            if not t:
+                continue
+            agg[t] = agg.get(t, 0) + (count if isinstance(count, int) else 0)
+
+    return [t for t, _ in sorted(agg.items(), key=lambda x: -x[1])[:limit]]
+
+
+def suggested_tags_for_file(path) -> list[str]:
+    """Come :func:`suggested_tags`, ma legge l'header dal file su disco.
+
+    Ritorna lista vuota su qualsiasi errore (file assente, non-LoRA, ecc.)."""
+    try:
+        return suggested_tags(read_safetensors_header(Path(path)))
+    except Exception:  # noqa: BLE001 — robustezza UI: mai sollevare nel picker
+        return []
+
+
 # --- Scan ---------------------------------------------------------------
 
 

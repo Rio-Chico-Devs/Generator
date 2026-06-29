@@ -21,7 +21,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -45,6 +46,70 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+
+class _FlowLayout(QLayout):
+    """Layout che dispone i widget in fila e va a capo automaticamente.
+
+    Serve per i "chip" dei tag suggeriti: ne mostriamo un numero variabile e
+    devono andare a capo in base alla larghezza disponibile."""
+
+    def __init__(self, parent=None, spacing: int = 6) -> None:
+        super().__init__(parent)
+        self._items: list = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:  # noqa: N802 (Qt override)
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int):  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        x, y, line_height = rect.x(), rect.y(), 0
+        for item in self._items:
+            w = item.sizeHint().width()
+            h = item.sizeHint().height()
+            next_x = x + w + self._spacing
+            if next_x - self._spacing > rect.right() and line_height > 0:
+                x = rect.x()
+                y = y + line_height + self._spacing
+                next_x = x + w + self._spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), QSize(w, h)))
+            x = next_x
+            line_height = max(line_height, h)
+        return y + line_height - rect.y()
 
 from src.core.credits import CreditWallet, InsufficientCreditsError
 from src.core.generation_form import (
@@ -103,6 +168,7 @@ class _LoraSlot(QWidget):
     def __init__(self, index: int, parent=None) -> None:
         super().__init__(parent)
         self._path: Optional[Path] = None
+        self._tags: list[str] = []
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -150,6 +216,8 @@ class _LoraSlot(QWidget):
             return
         self._path = Path(path)
         self.name.setText(f"LoRA: {self._path.name}")
+        from src.studio.model_scanner import suggested_tags_for_file
+        self._tags = suggested_tags_for_file(self._path)
         self.enabled.setChecked(True)
         self.changed.emit()
 
@@ -173,6 +241,10 @@ class _LoraSlot(QWidget):
             )
             return choice == QMessageBox.StandardButton.Yes
         return True
+
+    def tags(self) -> list[str]:
+        """Tag suggeriti estratti dai metadati della LoRA (vuoto se nessuno)."""
+        return self._tags if self._path is not None else []
 
     def is_active(self) -> bool:
         return self.enabled.isChecked() and self._path is not None
@@ -373,9 +445,65 @@ class GenerateView(QWidget):
         for i in range(3):
             slot = _LoraSlot(i)
             slot.changed.connect(self._update_cost)
+            slot.changed.connect(self._refresh_suggested_tags)
             self.lora_slots.append(slot)
             v.addWidget(slot)
+
+        # Tag suggeriti: estratti dai metadati delle LoRA selezionate,
+        # cliccabili per inserirli nel prompt.
+        self._tags_label = QLabel("Tag suggeriti (clicca per aggiungerli al prompt):")
+        self._tags_label.setStyleSheet("color: #8a8d96; font-size: 11px;")
+        self._tags_label.setVisible(False)
+        v.addWidget(self._tags_label)
+
+        self._tags_container = QWidget()
+        self._tags_flow = _FlowLayout(self._tags_container, spacing=4)
+        v.addWidget(self._tags_container)
         return box
+
+    def _refresh_suggested_tags(self) -> None:
+        """Ricostruisce i chip dei tag dalle LoRA attualmente selezionate."""
+        # Svuota i chip esistenti.
+        while self._tags_flow.count():
+            item = self._tags_flow.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        # Aggrega i tag di tutti gli slot con una LoRA scelta (dedup, ordine).
+        seen: set[str] = set()
+        tags: list[str] = []
+        for slot in self.lora_slots:
+            for t in slot.tags():
+                if t not in seen:
+                    seen.add(t)
+                    tags.append(t)
+
+        self._tags_label.setVisible(bool(tags))
+        for tag in tags:
+            chip = QPushButton(tag)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setToolTip(f"Aggiungi “{tag}” al prompt")
+            chip.setStyleSheet(
+                "QPushButton { background: #2a2d36; border: 1px solid #3a3d46;"
+                " border-radius: 10px; padding: 2px 8px; color: #cdd0d8; }"
+                "QPushButton:hover { background: #353945; }"
+            )
+            chip.clicked.connect(lambda _checked=False, t=tag: self._insert_tag(t))
+            self._tags_flow.addWidget(chip)
+
+    def _insert_tag(self, tag: str) -> None:
+        """Inserisce un tag nel prompt positivo (con separatore, se serve)."""
+        current = self.prompt.toPlainText().rstrip()
+        if current and not current.endswith(","):
+            current += ","
+        new_text = (current + " " + tag).strip() if current else tag
+        self.prompt.setPlainText(new_text)
+        # Cursore alla fine, focus al prompt per continuare a scrivere.
+        cursor = self.prompt.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.prompt.setTextCursor(cursor)
+        self.prompt.setFocus()
 
     def _build_settings_group(self) -> QGroupBox:
         box = QGroupBox("Impostazioni")
