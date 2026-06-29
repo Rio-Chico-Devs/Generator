@@ -116,7 +116,10 @@ def generate_toml(
         "optimizer_type": optimizer,
         # Precision / memory
         "mixed_precision": preset.mixed_precision,
-        "xformers": preset.xformers,
+        # Attention efficiente in memoria. Usiamo SDPA (integrato in PyTorch):
+        # niente dipendenza xformers, che su Windows è fragile da agganciare
+        # alla versione esatta di torch. Stessa resa in VRAM per LoRA SDXL.
+        "sdpa": True,
         "gradient_checkpointing": preset.gradient_checkpointing,
         "cache_latents": preset.cache_latents,
         # Misc
