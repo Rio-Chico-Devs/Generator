@@ -101,6 +101,12 @@ class ComfyServer:
         vram_flag = _VRAM_FLAGS.get(self.vram_mode)
         if vram_flag:
             cmd.append(vram_flag)
+
+        # Profilo memoria adattivo: su PC con poca RAM, riduci il consumo
+        # (niente pinned memory né async offload) per evitare i crash in
+        # caricamento checkpoint. Non cambia la qualità, solo memoria/velocità.
+        cmd += self._memory_profile_flags()
+
         logger.info("Avvio ComfyUI: %s (porta %d)", " ".join(cmd), self.port)
 
         self._proc = subprocess.Popen(
@@ -150,6 +156,34 @@ class ComfyServer:
                 return True
             time.sleep(1.0)
         return False
+
+    # Soglia RAM (GB): sotto questa, ComfyUI parte in modalità memoria prudente.
+    _LOW_RAM_THRESHOLD_GB: float = 20.0
+
+    def _memory_profile_flags(self) -> list[str]:
+        """Sceglie i flag memoria di ComfyUI in base alla RAM di sistema.
+
+        Su macchine con poca RAM (≤ soglia) la "pinned memory" (RAM bloccata,
+        ~6 GB) e l'async offload saturano i 16 GB durante il caricamento del
+        checkpoint, causando access violation. Disabilitarli scambia un po' di
+        velocità con la stabilità, senza toccare la qualità dell'output.
+        """
+        try:
+            import psutil
+            total_gb = psutil.virtual_memory().total / (1024 ** 3)
+        except Exception:
+            logger.warning("psutil non disponibile: profilo memoria standard")
+            return []
+
+        if total_gb <= self._LOW_RAM_THRESHOLD_GB:
+            flags = ["--disable-pinned-memory", "--disable-async-offload"]
+            logger.info(
+                "RAM %.1f GB ≤ %.0f GB → profilo memoria PRUDENTE: %s",
+                total_gb, self._LOW_RAM_THRESHOLD_GB, " ".join(flags),
+            )
+            return flags
+        logger.info("RAM %.1f GB → profilo memoria STANDARD", total_gb)
+        return []
 
     def _write_extra_model_paths_config(self) -> Path:
         """Scrive il config YAML che fa vedere a ComfyUI i modelli "ufficiali"
