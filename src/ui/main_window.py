@@ -495,6 +495,25 @@ class MainWindow(QMainWindow):
         self._last_snap = snap
         self._render_status()
 
+    @staticmethod
+    def _system_resources_line() -> tuple[str, bool]:
+        """Riga RAM/CPU di sistema + flag 'RAM critica' (>90%).
+
+        La RAM di sistema è la risorsa che satura quando ComfyUI carica un
+        checkpoint da 6+ GB su un PC con poca memoria: mostrarla in tempo reale
+        rende visibile la pressione che causa i crash in caricamento."""
+        try:
+            import psutil
+        except ImportError:
+            return "", False
+        vm = psutil.virtual_memory()
+        used_gb = (vm.total - vm.available) / (1024 ** 3)
+        total_gb = vm.total / (1024 ** 3)
+        cpu = psutil.cpu_percent(interval=None)
+        critical = vm.percent >= 90.0
+        warn = "⚠️ " if critical else ""
+        return f"{warn}RAM: {used_gb:.1f}/{total_gb:.1f}GB ({vm.percent:.0f}%) · CPU: {cpu:.0f}%", critical
+
     def _render_status(self) -> None:
         from src.utils.gpu_monitor import GpuSnapshot, ThermalState
 
@@ -512,15 +531,22 @@ class MainWindow(QMainWindow):
             parts.append(f"Comfy: {self._comfy_state}")
 
         parts.append(snap.status_line())
+        sys_line, ram_critical = self._system_resources_line()
+        if sys_line:
+            parts.append(sys_line)
         self.status_bar.showMessage(" │ ".join(parts))
 
-        # Colore della status bar in base allo stato termico
-        color = {
-            ThermalState.COOL: "#8a8d96",
-            ThermalState.NORMAL: "#8a8d96",
-            ThermalState.WARM: "#d9a441",   # ambra: caldo ma sicuro
-            ThermalState.HOT: "#d96a6a",    # rosso: throttling hardware attivo
-        }.get(snap.thermal_state, "#8a8d96") if snap.available else "#8a8d96"
+        # Colore della status bar: RAM critica ha priorità (è la causa dei crash
+        # in caricamento), poi lo stato termico.
+        if ram_critical:
+            color = "#d96a6a"  # rosso: RAM quasi piena, rischio crash
+        else:
+            color = {
+                ThermalState.COOL: "#8a8d96",
+                ThermalState.NORMAL: "#8a8d96",
+                ThermalState.WARM: "#d9a441",   # ambra: caldo ma sicuro
+                ThermalState.HOT: "#d96a6a",    # rosso: throttling hardware attivo
+            }.get(snap.thermal_state, "#8a8d96") if snap.available else "#8a8d96"
         self.status_bar.setStyleSheet(f"QStatusBar {{ color: {color}; }}")
 
     def closeEvent(self, event) -> None:
