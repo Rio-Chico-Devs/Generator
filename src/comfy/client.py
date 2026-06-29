@@ -152,6 +152,9 @@ class ComfyClient:
     # Il watchdog dell'idle totale usa _IDLE_WATCHDOG_SEC.
     _RECV_TIMEOUT_SEC: float = 2.0
     _IDLE_WATCHDOG_SEC: float = 120.0
+    # Timeout dell'handshake WebSocket: generoso perché alla PRIMA generazione
+    # ComfyUI sta caricando il checkpoint (6+ GB) e può non rispondere subito.
+    _CONNECT_TIMEOUT_SEC: float = 60.0
 
     def wait_for_completion(
         self,
@@ -171,11 +174,14 @@ class ComfyClient:
         import websocket  # websocket-client
 
         ws = websocket.WebSocket()
-        ws.settimeout(self._RECV_TIMEOUT_SEC)
+        # Handshake con timeout generoso (il modello potrebbe star caricando),
+        # poi passa al timeout breve per le recv (aborto reattivo).
+        ws.settimeout(self._CONNECT_TIMEOUT_SEC)
         try:
             ws.connect(f"ws://{self.host}:{self.port}/ws?clientId={self.client_id}")
         except (OSError, websocket.WebSocketException) as e:
             raise ComfyError(f"Connessione WebSocket a ComfyUI fallita: {e}") from e
+        ws.settimeout(self._RECV_TIMEOUT_SEC)
 
         idle_since = time.monotonic()
 
