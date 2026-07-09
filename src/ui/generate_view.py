@@ -21,18 +21,20 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QPoint, QRect, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
+    QDialog,
     QDoubleSpinBox,
     QFileDialog,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
@@ -45,6 +47,70 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+
+class _FlowLayout(QLayout):
+    """Layout che dispone i widget in fila e va a capo automaticamente.
+
+    Serve per i "chip" dei tag suggeriti: ne mostriamo un numero variabile e
+    devono andare a capo in base alla larghezza disponibile."""
+
+    def __init__(self, parent=None, spacing: int = 6) -> None:
+        super().__init__(parent)
+        self._items: list = []
+        self._spacing = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item) -> None:  # noqa: N802 (Qt override)
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):  # noqa: N802
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int):  # noqa: N802
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):  # noqa: N802
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect) -> None:  # noqa: N802
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:  # noqa: N802
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        return size
+
+    def _do_layout(self, rect, test_only: bool) -> int:
+        x, y, line_height = rect.x(), rect.y(), 0
+        for item in self._items:
+            w = item.sizeHint().width()
+            h = item.sizeHint().height()
+            next_x = x + w + self._spacing
+            if next_x - self._spacing > rect.right() and line_height > 0:
+                x = rect.x()
+                y = y + line_height + self._spacing
+                next_x = x + w + self._spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), QSize(w, h)))
+            x = next_x
+            line_height = max(line_height, h)
+        return y + line_height - rect.y()
+
 from src.core.credits import CreditWallet, InsufficientCreditsError
 from src.core.generation_form import (
     SAMPLERS,
@@ -56,6 +122,7 @@ from src.core.generation_form import (
 )
 from src.core.project import Project
 from src.core.recipes import RecipeId, get_recipe
+from src.ui.image_viewer import build_image_menu, show_image
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +145,21 @@ def _as_float(value) -> Optional[float]:
         return None
 
 
+def _default_lora_dir() -> str:
+    """Cartella iniziale del file picker LoRA: la loras/ ufficiale se esiste,
+    poi quella nativa di ComfyUI, altrimenti stringa vuota (cwd)."""
+    from src.utils.paths import get_models_dir, get_user_data_dir
+
+    candidates = (
+        get_models_dir() / "loras",
+        get_user_data_dir() / "engine" / "ComfyUI" / "models" / "loras",
+    )
+    for d in candidates:
+        if d.exists():
+            return str(d)
+    return ""
+
+
 class _LoraSlot(QWidget):
     """Una riga LoRA: abilita, nome file, peso. Scansiona il file alla scelta."""
 
@@ -86,6 +168,7 @@ class _LoraSlot(QWidget):
     def __init__(self, index: int, parent=None) -> None:
         super().__init__(parent)
         self._path: Optional[Path] = None
+        self._tags: list[str] = []
 
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
@@ -124,7 +207,7 @@ class _LoraSlot(QWidget):
 
     def _on_browse(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self, "Scegli LoRA", "",
+            self, "Scegli LoRA", _default_lora_dir(),
             "Modelli (*.safetensors *.pt *.ckpt *.bin *.pth)",
         )
         if not path:
@@ -133,6 +216,8 @@ class _LoraSlot(QWidget):
             return
         self._path = Path(path)
         self.name.setText(f"LoRA: {self._path.name}")
+        from src.studio.model_scanner import suggested_tags_for_file
+        self._tags = suggested_tags_for_file(self._path)
         self.enabled.setChecked(True)
         self.changed.emit()
 
@@ -157,6 +242,10 @@ class _LoraSlot(QWidget):
             return choice == QMessageBox.StandardButton.Yes
         return True
 
+    def tags(self) -> list[str]:
+        """Tag suggeriti estratti dai metadati della LoRA (vuoto se nessuno)."""
+        return self._tags if self._path is not None else []
+
     def is_active(self) -> bool:
         return self.enabled.isChecked() and self._path is not None
 
@@ -170,11 +259,41 @@ class _LoraSlot(QWidget):
         return None
 
 
+class _ClickableThumb(QLabel):
+    """Miniatura cliccabile: click sinistro apre il visore, destro il menu."""
+
+    def __init__(self, path: Path, on_refine=None, on_inpaint=None, parent=None) -> None:
+        super().__init__(parent)
+        self._path = path
+        self._on_refine = on_refine
+        self._on_inpaint = on_inpaint
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_menu)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt override)
+        if event.button() == Qt.MouseButton.LeftButton:
+            show_image(self._path, self.window())
+        super().mousePressEvent(event)
+
+    def _on_menu(self, pos) -> None:
+        extra = []
+        if self._on_refine is not None:
+            extra.append(("Migliora ✨ (Hires)", lambda: self._on_refine(self._path)))
+        if self._on_inpaint is not None:
+            extra.append(("Correggi zona ✏️", lambda: self._on_inpaint(self._path)))
+        build_image_menu(self.window(), self._path, extra_actions=extra or None).exec(
+            self.mapToGlobal(pos)
+        )
+
+
 class _ResultGallery(QWidget):
     """Griglia scrollabile di thumbnail dei risultati."""
 
-    def __init__(self, parent=None) -> None:
+    def __init__(self, on_refine=None, on_inpaint=None, parent=None) -> None:
         super().__init__(parent)
+        self._on_refine = on_refine
+        self._on_inpaint = on_inpaint
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
 
@@ -197,7 +316,9 @@ class _ResultGallery(QWidget):
         self._count = 0
 
     def add_image(self, path: Path) -> None:
-        label = QLabel()
+        label = _ClickableThumb(
+            path, on_refine=self._on_refine, on_inpaint=self._on_inpaint
+        )
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         label.setFixedSize(_THUMB_W, _THUMB_W)
         label.setStyleSheet("border: 1px solid #2a2d36; border-radius: 4px;")
@@ -212,7 +333,7 @@ class _ResultGallery(QWidget):
             )
         else:
             label.setText(path.name)
-        label.setToolTip(str(path))
+        label.setToolTip("Click per ingrandire · tasto destro per le opzioni")
         r, c = divmod(self._count, _GALLERY_COLS)
         self._grid.addWidget(label, r, c)
         self._count += 1
@@ -233,6 +354,7 @@ class GenerateView(QWidget):
         self._worker = None
         self._safety = None
         self._gpu_read_fn = None
+        self._comfy_input_dir: Optional[Path] = None
         self._pending_per_image = 0.0
         self._seed_locked = False
         self._last_used_seed: Optional[int] = None
@@ -273,7 +395,9 @@ class GenerateView(QWidget):
         self.status_label.setStyleSheet("color: #8a8d96;")
         right.addWidget(self.status_label)
 
-        self.gallery = _ResultGallery()
+        self.gallery = _ResultGallery(
+            on_refine=self.refine_image, on_inpaint=self.inpaint_image
+        )
         right.addWidget(self.gallery, 1)
         root.addLayout(right, 1)
 
@@ -313,6 +437,7 @@ class GenerateView(QWidget):
         from src.core.catalog import CATALOG
         for entry in CATALOG.values():
             self.model_combo.addItem(entry.name, entry.id)
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         row.addWidget(self.model_combo, 1)
         v.addLayout(row)
 
@@ -320,9 +445,65 @@ class GenerateView(QWidget):
         for i in range(3):
             slot = _LoraSlot(i)
             slot.changed.connect(self._update_cost)
+            slot.changed.connect(self._refresh_suggested_tags)
             self.lora_slots.append(slot)
             v.addWidget(slot)
+
+        # Tag suggeriti: estratti dai metadati delle LoRA selezionate,
+        # cliccabili per inserirli nel prompt.
+        self._tags_label = QLabel("Tag suggeriti (clicca per aggiungerli al prompt):")
+        self._tags_label.setStyleSheet("color: #8a8d96; font-size: 11px;")
+        self._tags_label.setVisible(False)
+        v.addWidget(self._tags_label)
+
+        self._tags_container = QWidget()
+        self._tags_flow = _FlowLayout(self._tags_container, spacing=4)
+        v.addWidget(self._tags_container)
         return box
+
+    def _refresh_suggested_tags(self) -> None:
+        """Ricostruisce i chip dei tag dalle LoRA attualmente selezionate."""
+        # Svuota i chip esistenti.
+        while self._tags_flow.count():
+            item = self._tags_flow.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        # Aggrega i tag di tutti gli slot con una LoRA scelta (dedup, ordine).
+        seen: set[str] = set()
+        tags: list[str] = []
+        for slot in self.lora_slots:
+            for t in slot.tags():
+                if t not in seen:
+                    seen.add(t)
+                    tags.append(t)
+
+        self._tags_label.setVisible(bool(tags))
+        for tag in tags:
+            chip = QPushButton(tag)
+            chip.setCursor(Qt.CursorShape.PointingHandCursor)
+            chip.setToolTip(f"Aggiungi “{tag}” al prompt")
+            chip.setStyleSheet(
+                "QPushButton { background: #2a2d36; border: 1px solid #3a3d46;"
+                " border-radius: 10px; padding: 2px 8px; color: #cdd0d8; }"
+                "QPushButton:hover { background: #353945; }"
+            )
+            chip.clicked.connect(lambda _checked=False, t=tag: self._insert_tag(t))
+            self._tags_flow.addWidget(chip)
+
+    def _insert_tag(self, tag: str) -> None:
+        """Inserisce un tag nel prompt positivo (con separatore, se serve)."""
+        current = self.prompt.toPlainText().rstrip()
+        if current and not current.endswith(","):
+            current += ","
+        new_text = (current + " " + tag).strip() if current else tag
+        self.prompt.setPlainText(new_text)
+        # Cursore alla fine, focus al prompt per continuare a scrivere.
+        cursor = self.prompt.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.prompt.setTextCursor(cursor)
+        self.prompt.setFocus()
 
     def _build_settings_group(self) -> QGroupBox:
         box = QGroupBox("Impostazioni")
@@ -534,15 +715,52 @@ class GenerateView(QWidget):
             if project.base_model is not None:
                 idx = self.model_combo.findData(project.base_model.id)
                 if idx >= 0:
+                    # Sync programmatico: non deve riscrivere il progetto.
+                    self.model_combo.blockSignals(True)
                     self.model_combo.setCurrentIndex(idx)
+                    self.model_combo.blockSignals(False)
             d = project.default_generation_params
             self.steps_spin.setValue(d.steps)
             self.cfg_spin.setValue(d.cfg_scale)
         self._update_generate_enabled()
 
+    def _on_model_changed(self, _index: int) -> None:
+        """L'utente ha scelto un altro modello base: aggiorna e salva il
+        progetto, così la generazione usa davvero il modello selezionato."""
+        self._sync_model_to_project()
+
+    def _sync_model_to_project(self) -> None:
+        """Allinea il modello base del progetto a quello mostrato nel menu.
+
+        Garantisce che il modello USATO sia sempre quello che l'utente VEDE
+        selezionato, anche per un progetto creato senza scegliere il modello."""
+        if self._project is None:
+            return
+        model_id = self.model_combo.currentData()
+        if not model_id:
+            return
+        from src.core.catalog import CATALOG
+        from src.core.project import BaseModelRef
+        entry = CATALOG.get(model_id)
+        if entry is None:
+            return
+        current = self._project.base_model
+        if current is not None and current.id == model_id:
+            return  # già allineato, niente da salvare
+        self._project.base_model = BaseModelRef(id=model_id, name=entry.name)
+        try:
+            self._project.save()
+        except Exception:
+            logger.warning("Salvataggio modello base del progetto fallito", exc_info=True)
+
     def set_comfy_client(self, client) -> None:
         self._client = client
         self._update_generate_enabled()
+
+    def set_comfy_input_dir(self, path) -> None:
+        """Cartella input di ComfyUI: serve per il refine (img2img), che vi
+        copia l'immagine sorgente prima di rigenerarla."""
+        self._comfy_input_dir = Path(path) if path is not None else None
 
     def set_wallet(self, wallet: CreditWallet) -> None:
         self._wallet = wallet
@@ -713,6 +931,8 @@ class GenerateView(QWidget):
     def _on_generate(self, batch_override: Optional[int] = None) -> None:
         if self._project is None or self._client is None or self._wallet is None:
             return
+        # Il modello usato deve essere quello selezionato nel menu "Base".
+        self._sync_model_to_project()
         form = self._collect_form()
         if batch_override is not None:
             form.batch = batch_override
@@ -726,24 +946,171 @@ class GenerateView(QWidget):
             )
             return
 
-        self._pending_per_image = breakdown.per_image
-        self._last_used_seed = None  # reset: cattura il seed della nuova generazione
-        self.gallery.clear()
+        self._launch_worker(
+            recipe=get_recipe(RecipeId.BASE),
+            user_params=form.to_user_params(),
+            per_image_cost=breakdown.per_image,
+            status_text="Generazione in corso…",
+            clear_gallery=True,
+            reset_seed_capture=True,
+        )
+
+    def refine_image(self, path: Path) -> None:
+        """Esegue un passaggio Hires (img2img a bassa denoise) su un'immagine
+        già generata: la ingrandisce e ne rifinisce il dettaglio."""
+        if self._project is None or self._client is None or self._wallet is None:
+            return
+        if self._worker is not None:
+            QMessageBox.information(
+                self, "Generazione in corso",
+                "Aspetta che finisca la generazione attuale prima di migliorare.",
+            )
+            return
+        if self._comfy_input_dir is None:
+            QMessageBox.warning(
+                self, "Motore non pronto",
+                "Il refine richiede ComfyUI attivo. Riprova quando il motore è pronto.",
+            )
+            return
+        src = Path(path)
+        if not src.exists():
+            QMessageBox.warning(self, "File assente", f"Immagine non trovata:\n{src}")
+            return
+
+        # Recupera prompt/negativo originali dal sidecar, così il refine resta
+        # coerente con l'immagine di partenza. Se manca, procede senza prompt.
+        positive = ""
+        negative = "low quality, worst quality, blurry"
+        try:
+            from src.core.gallery import load_sidecar
+            sc = load_sidecar(src)
+            positive = str(sc.get("positive", "") or "")
+            negative = str(sc.get("negative", "") or negative)
+        except Exception:
+            pass
+
+        # Riusa la selezione LoRA corrente del form (es. enhancer2 se attivo).
+        extra_loras = tuple(
+            spec for s in self.lora_slots if (spec := s.spec()) is not None
+        )
+        user_params = {
+            "image": str(src),
+            "prompt": positive,
+            "negative": negative,
+            "scale_by": 1.5,
+            "denoise": 0.4,
+            "seed": -1,
+            "lora_weight": extra_loras[0][1] if extra_loras else 0.85,
+            "loras": [
+                {"path": p, "weight": float(w)} for p, w in extra_loras
+            ],
+        }
+        # Costo: stima approssimata riusando il form corrente (wallet gamificato).
+        per_image = self._collect_form().estimate().per_image
+        if not self._wallet.can_afford(per_image):
+            QMessageBox.warning(
+                self, "Crediti insufficienti",
+                f"Servono {per_image:.2f} crediti, disponibili {self._wallet.balance:.2f}.",
+            )
+            return
+
+        self._launch_worker(
+            recipe=get_recipe(RecipeId.REFINE),
+            user_params=user_params,
+            per_image_cost=per_image,
+            status_text="Miglioramento (Hires) in corso…",
+            clear_gallery=False,   # tieni l'originale visibile per il confronto
+            reset_seed_capture=False,
+        )
+
+    def inpaint_image(self, path: Path) -> None:
+        """Apre il dialog di inpainting su un'immagine e rigenera solo la zona
+        mascherata (ricetta correct_inpaint, soli nodi core)."""
+        if self._project is None or self._client is None or self._wallet is None:
+            return
+        if self._worker is not None:
+            QMessageBox.information(
+                self, "Generazione in corso",
+                "Aspetta che finisca la generazione attuale prima di correggere.",
+            )
+            return
+        if self._comfy_input_dir is None:
+            QMessageBox.warning(
+                self, "Motore non pronto",
+                "La correzione richiede ComfyUI attivo. Riprova quando il motore è pronto.",
+            )
+            return
+        src = Path(path)
+        if not src.exists():
+            QMessageBox.warning(self, "File assente", f"Immagine non trovata:\n{src}")
+            return
+
+        from src.ui.inpaint_dialog import InpaintDialog
+        dlg = InpaintDialog(src, parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.mask_path is None:
+            return
+
+        extra_loras = tuple(
+            spec for s in self.lora_slots if (spec := s.spec()) is not None
+        )
+        user_params = {
+            "image": str(src),
+            "mask": str(dlg.mask_path),
+            "prompt": dlg.prompt,
+            "negative": "low quality, worst quality, blurry, jpeg artifacts",
+            "strength": dlg.strength,
+            "variants": 1,
+            "seed": -1,
+            "lora_weight": extra_loras[0][1] if extra_loras else 0.85,
+            "loras": [{"path": p, "weight": float(w)} for p, w in extra_loras],
+        }
+        per_image = self._collect_form().estimate().per_image
+        if not self._wallet.can_afford(per_image):
+            QMessageBox.warning(
+                self, "Crediti insufficienti",
+                f"Servono {per_image:.2f} crediti, disponibili {self._wallet.balance:.2f}.",
+            )
+            return
+
+        self._launch_worker(
+            recipe=get_recipe(RecipeId.CORRECT),
+            user_params=user_params,
+            per_image_cost=per_image,
+            status_text="Correzione in corso…",
+            clear_gallery=False,
+            reset_seed_capture=False,
+        )
+
+    def _launch_worker(
+        self,
+        recipe,
+        user_params: dict,
+        per_image_cost: float,
+        status_text: str,
+        clear_gallery: bool,
+        reset_seed_capture: bool,
+    ) -> None:
+        """Avvia un RecipeWorker e aggancia i segnali (condiviso tra generazione
+        e refine)."""
+        self._pending_per_image = per_image_cost
+        if reset_seed_capture:
+            self._last_used_seed = None
+        if clear_gallery:
+            self.gallery.clear()
         self.progress.setVisible(True)
         self.progress.setRange(0, 0)  # indeterminato finché non arriva il primo step
         self.cancel_btn.setVisible(True)
-        self.status_label.setText("Generazione in corso…")
+        self.status_label.setText(status_text)
 
         from src.workers.recipe_worker import RecipeWorker
 
-        recipe = get_recipe(RecipeId.BASE)
         self._worker = RecipeWorker(
             recipe=recipe,
-            user_params=form.to_user_params(),
+            user_params=user_params,
             project=self._project,
             client=self._client,
             output_dir=self._project.gallery_dir,
-            comfy_input_dir=None,
+            comfy_input_dir=self._comfy_input_dir,
             safety=self._safety,
             gpu_read_fn=self._gpu_read_fn,
             parent=self,

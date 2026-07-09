@@ -19,6 +19,7 @@ class RecipeId(str, Enum):
     CHARACTER_IN_POSE = "character_in_pose"
     PRODUCT_IN_SCENE = "product_in_scene"
     CORRECT = "correct_inpaint"
+    REFINE = "hires_refine"
 
 
 @dataclass
@@ -127,6 +128,33 @@ RECIPES: dict[RecipeId, RecipeDef] = {
             RecipeInput("lora_weight", "Forza stile", "number", default=0.8,
                         advanced=True),
             RecipeInput("seed", "Seed", "number", default=-1, advanced=True),
+        ],
+    ),
+    RecipeId.REFINE: RecipeDef(
+        id=RecipeId.REFINE,
+        name="Migliora (Hires)",
+        description=(
+            "Prende un'immagine già generata, la ingrandisce e fa un secondo "
+            "passaggio leggero che aggiunge dettaglio e nitidezza senza "
+            "stravolgere la composizione."
+        ),
+        workflow_file="hires_refine.json",
+        required_models=[],
+        priority_phase=1,
+        inputs=[
+            RecipeInput("image", "Immagine", "image"),
+            RecipeInput("prompt", "Descrizione", "text", required=False),
+            RecipeInput("negative", "Da evitare", "text", required=False,
+                        default="low quality, worst quality, blurry"),
+            RecipeInput("scale_by", "Ingrandimento", "number", default=1.5,
+                        advanced=True, help="1.0 = stessa dimensione, 2.0 = doppia"),
+            RecipeInput("denoise", "Intensità", "number", default=0.4,
+                        advanced=True,
+                        help="Bassa = ritocca, alta = ridisegna (0.3–0.5 consigliato)"),
+            RecipeInput("lora_weight", "Forza stile", "number", default=0.85,
+                        advanced=True),
+            RecipeInput("seed", "Seed", "number", default=-1, advanced=True,
+                        help="-1 = casuale"),
         ],
     ),
     RecipeId.CORRECT: RecipeDef(

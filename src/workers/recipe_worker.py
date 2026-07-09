@@ -368,7 +368,7 @@ def _parametrize(
     # 6. Immagini input (pose, personaggio, prodotto…)
     #    Copia nella dir input di ComfyUI e aggiorna il nodo LoadImage
     for inp in recipe.inputs:
-        if inp.kind not in ("image", "pose", "character"):
+        if inp.kind not in ("image", "pose", "character", "mask"):
             continue
         raw = user_params.get(inp.key)
         if raw is None:

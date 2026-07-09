@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
+from pathlib import Path
 
 from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import QApplication
@@ -70,8 +72,15 @@ def _apply_stylesheet(app: QApplication) -> None:
 
 def run_app(argv: list[str]) -> int:
     args = _parse_args(argv)
+    # --data-dir: imposta VFORGE_DATA_DIR PRIMA di qualsiasi risoluzione path,
+    # così l'app trova engine/ComfyUI, modelli e progetti senza dipendere da
+    # una variabile d'ambiente di sessione (fonte ricorrente di "ComfyUI non
+    # installato" quando si lancia da una shell senza la variabile impostata).
+    if args.data_dir:
+        os.environ["VFORGE_DATA_DIR"] = str(Path(args.data_dir).expanduser())
     _setup_logging(args.debug)
     logger.info("Vihente Forge starting up (mock=%s, debug=%s)", args.mock, args.debug)
+    logger.info("Data dir: %s", os.environ.get("VFORGE_DATA_DIR", "(default ~/Documents)"))
 
     app = QApplication(argv)
     app.setApplicationName("Vihente Forge")

@@ -48,7 +48,8 @@ Gestito da `src/comfy/server.py`:
 [AVVIO APP]
   1. Trova porta libera (default 8188, fallback incrementale)
   2. Lancia subprocess ComfyUI con flag corretti
-  3. Poll health endpoint finché risponde (timeout 60s)
+  3. Poll health endpoint finché risponde (timeout 180s: il primo
+     avvio a freddo di ComfyUI 0.26+ con tutti i plugin è lento)
   4. Se non risponde: errore chiaro all'utente, app degrada
      a sola gestione progetti/dataset (no generazione)
 
@@ -82,8 +83,16 @@ termina.
         │   ├── comfyui_controlnet_aux/   (estrazione posa)
         │   ├── ComfyUI-IC-Light/
         │   └── ...
-        └── models/           ← symlink a ~/Documents/.../models/
+        └── models/           ← cartella nativa ComfyUI
 ```
+
+I checkpoint/LoRA/VAE "ufficiali" di Vihente Forge vivono in
+`~/Documents/Vihente Forge/models/{checkpoints,loras,vae}/`. ComfyUI li
+vede SENZA symlink: `ComfyServer.start()` genera al volo un
+`extra_model_paths.yaml` (root aggiuntiva, non sostitutiva) e lo passa
+con `--extra-model-paths-config`. Niente junction/symlink: funziona
+senza privilegi admin su Windows e non tocca la cartella nativa
+`ComfyUI/models/`, dove restano eventuali modelli piazzati manualmente.
 
 I custom_nodes necessari sono installati al primo avvio (download una
 tantum da GitHub) oppure inclusi nel bundle PyInstaller per

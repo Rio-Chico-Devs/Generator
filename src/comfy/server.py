@@ -15,9 +15,21 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from src.utils.paths import get_app_data_dir, get_user_data_dir
+from src.utils.paths import get_app_data_dir, get_models_dir, get_user_data_dir
 
 logger = logging.getLogger(__name__)
+
+
+# Profili VRAM → flag CLI di ComfyUI. "normalvram" (default storico della
+# nostra config) e "normal" non hanno più un flag dedicato: il profilo
+# bilanciato è semplicemente l'assenza di flag. Mappiamo solo quelli reali.
+_VRAM_FLAGS: dict[str, str] = {
+    "lowvram": "--lowvram",
+    "novram": "--novram",
+    "highvram": "--highvram",
+    "gpu-only": "--gpu-only",
+    "cpu": "--cpu",
+}
 
 
 def find_free_port(start: int = 8188, attempts: int = 20) -> int:
@@ -56,7 +68,7 @@ class ComfyServer:
     def is_installed(self) -> bool:
         return (self.comfy_dir / "main.py").exists()
 
-    def start(self, timeout: float = 60.0) -> int:
+    def start(self, timeout: float = 180.0) -> int:
         """Avvia ComfyUI, attende che risponda, ritorna la porta."""
         if not self.is_installed():
             raise RuntimeError(
@@ -72,15 +84,29 @@ class ComfyServer:
         log_dir.mkdir(parents=True, exist_ok=True)
         self._log_file = open(log_dir / "comfyui.log", "w", encoding="utf-8")
 
+        extra_paths_config = self._write_extra_model_paths_config()
+
         cmd = [
             sys.executable,
             "main.py",
             "--listen", "127.0.0.1",
             "--port", str(self.port),
             "--disable-auto-launch",
-            f"--{self.vram_mode}",
             "--use-pytorch-cross-attention",
+            "--extra-model-paths-config", str(extra_paths_config),
         ]
+        # ComfyUI ha rimosso --normalvram: il profilo "normale" è l'assenza
+        # di flag. Passiamo un flag SOLO per i profili che ne hanno ancora uno
+        # (low/no/high vram, gpu-only, cpu); "normalvram"/"normal"/"" → default.
+        vram_flag = _VRAM_FLAGS.get(self.vram_mode)
+        if vram_flag:
+            cmd.append(vram_flag)
+
+        # Profilo memoria adattivo: su PC con poca RAM, riduci il consumo
+        # (niente pinned memory né async offload) per evitare i crash in
+        # caricamento checkpoint. Non cambia la qualità, solo memoria/velocità.
+        cmd += self._memory_profile_flags()
+
         logger.info("Avvio ComfyUI: %s (porta %d)", " ".join(cmd), self.port)
 
         self._proc = subprocess.Popen(
@@ -130,6 +156,57 @@ class ComfyServer:
                 return True
             time.sleep(1.0)
         return False
+
+    # Soglia RAM (GB): sotto questa, ComfyUI parte in modalità memoria prudente.
+    _LOW_RAM_THRESHOLD_GB: float = 20.0
+
+    def _memory_profile_flags(self) -> list[str]:
+        """Sceglie i flag memoria di ComfyUI in base alla RAM di sistema.
+
+        Su macchine con poca RAM (≤ soglia) la "pinned memory" (RAM bloccata,
+        ~6 GB) e l'async offload saturano i 16 GB durante il caricamento del
+        checkpoint, causando access violation. Disabilitarli scambia un po' di
+        velocità con la stabilità, senza toccare la qualità dell'output.
+        """
+        try:
+            import psutil
+            total_gb = psutil.virtual_memory().total / (1024 ** 3)
+        except Exception:
+            logger.warning("psutil non disponibile: profilo memoria standard")
+            return []
+
+        if total_gb <= self._LOW_RAM_THRESHOLD_GB:
+            flags = ["--disable-pinned-memory", "--disable-async-offload"]
+            logger.info(
+                "RAM %.1f GB ≤ %.0f GB → profilo memoria PRUDENTE: %s",
+                total_gb, self._LOW_RAM_THRESHOLD_GB, " ".join(flags),
+            )
+            return flags
+        logger.info("RAM %.1f GB → profilo memoria STANDARD", total_gb)
+        return []
+
+    def _write_extra_model_paths_config(self) -> Path:
+        """Scrive il config YAML che fa vedere a ComfyUI i modelli "ufficiali"
+        di Vihente Forge (in ``VFORGE_DATA_DIR/models/``), in aggiunta alla sua
+        cartella nativa ``ComfyUI/models/``. Niente symlink/junction: ComfyUI
+        supporta nativamente più root via ``--extra-model-paths-config``, ed
+        è l'unico approccio che non richiede privilegi admin su Windows.
+        """
+        models_dir = get_models_dir()
+        for sub in ("checkpoints", "loras", "vae"):
+            (models_dir / sub).mkdir(parents=True, exist_ok=True)
+
+        config_path = get_app_data_dir() / "comfy_extra_model_paths.yaml"
+        base_path = models_dir.resolve().as_posix()
+        config_path.write_text(
+            "vihente_forge:\n"
+            f"    base_path: {base_path}\n"
+            "    checkpoints: checkpoints\n"
+            "    loras: loras\n"
+            "    vae: vae\n",
+            encoding="utf-8",
+        )
+        return config_path
 
     def _kill_orphans(self) -> None:
         """Termina processi ComfyUI orfani (da crash precedenti)."""

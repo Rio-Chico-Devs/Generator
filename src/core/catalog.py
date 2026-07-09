@@ -39,6 +39,46 @@ class ModelEntry:
 
 
 CATALOG: dict[str, ModelEntry] = {
+    # --- Checkpoint personali di Bru (scaricati da Tensor.art, non da HF) ---
+    # In cima di proposito: così sono i primi nei menu e un progetto creato
+    # senza scegliere esplicitamente usa un modello che l'utente possiede
+    # davvero (non un default del catalogo non scaricato).
+    # id = nome file esatto (senza estensione): RecipeWorker costruisce il nome
+    # del checkpoint per ComfyUI come f"{model_id}.safetensors", quindi deve
+    # combaciare col file reale in models/checkpoints. repo_id/license sono solo
+    # informativi: questi modelli non passano dal download manager.
+    "WAI-Nsfw-Illustrious-17": ModelEntry(
+        id="WAI-Nsfw-Illustrious-17",
+        name="WAI NSFW Illustrious v17",
+        family="sdxl",
+        repo_id="tensor.art (locale, non scaricato da HF)",
+        revision=None,
+        size_gb=6.46,
+        license="Da verificare (CivitAI/Tensor.art, termini originali non confermati)",
+        license_url="",
+        suitable_for=("character", "illustration"),
+        min_vram_gb_inference=5.5,
+        min_vram_gb_training=7.5,
+        commercial_use_ok=False,
+        description="Checkpoint personale, basato su Illustrious. Stessa convenzione di prompt di illustrious-xl.",
+        prompt_dialect="illustrious",
+    ),
+    "reedNSFWIllustrious_v40": ModelEntry(
+        id="reedNSFWIllustrious_v40",
+        name="ReedNSFW Illustrious v40",
+        family="sdxl",
+        repo_id="tensor.art (locale, non scaricato da HF)",
+        revision=None,
+        size_gb=6.62,
+        license="Da verificare (CivitAI/Tensor.art, termini originali non confermati)",
+        license_url="",
+        suitable_for=("character", "illustration"),
+        min_vram_gb_inference=5.5,
+        min_vram_gb_training=7.5,
+        commercial_use_ok=False,
+        description="Checkpoint personale, basato su Illustrious. Stessa convenzione di prompt di illustrious-xl.",
+        prompt_dialect="illustrious",
+    ),
     "pony-v6-xl": ModelEntry(
         id="pony-v6-xl",
         name="Pony Diffusion V6 XL",

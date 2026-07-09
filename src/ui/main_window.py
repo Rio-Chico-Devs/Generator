@@ -82,7 +82,7 @@ class _GpuPoller(QThread):
 
 
 class _ComfyStarter(QThread):
-    """Avvia ComfyUI in background — start() blocca fino a ~60s.
+    """Avvia ComfyUI in background — start() blocca fino a ~180s.
 
     Il risultato arriva via signal nel main thread (thread-safe).
     """
@@ -469,6 +469,8 @@ class MainWindow(QMainWindow):
         gv = getattr(self, "_generate_view", None)
         if gv is not None:
             gv.set_comfy_client(self._comfy_client)
+            if self._comfy_server is not None:
+                gv.set_comfy_input_dir(self._comfy_server.input_dir)
         guided = getattr(self, "_guided_view", None)
         if guided is not None:
             guided.set_comfy_client(self._comfy_client)
@@ -493,6 +495,25 @@ class MainWindow(QMainWindow):
         self._last_snap = snap
         self._render_status()
 
+    @staticmethod
+    def _system_resources_line() -> tuple[str, bool]:
+        """Riga RAM/CPU di sistema + flag 'RAM critica' (>90%).
+
+        La RAM di sistema è la risorsa che satura quando ComfyUI carica un
+        checkpoint da 6+ GB su un PC con poca memoria: mostrarla in tempo reale
+        rende visibile la pressione che causa i crash in caricamento."""
+        try:
+            import psutil
+        except ImportError:
+            return "", False
+        vm = psutil.virtual_memory()
+        used_gb = (vm.total - vm.available) / (1024 ** 3)
+        total_gb = vm.total / (1024 ** 3)
+        cpu = psutil.cpu_percent(interval=None)
+        critical = vm.percent >= 90.0
+        warn = "⚠️ " if critical else ""
+        return f"{warn}RAM: {used_gb:.1f}/{total_gb:.1f}GB ({vm.percent:.0f}%) · CPU: {cpu:.0f}%", critical
+
     def _render_status(self) -> None:
         from src.utils.gpu_monitor import GpuSnapshot, ThermalState
 
@@ -510,15 +531,22 @@ class MainWindow(QMainWindow):
             parts.append(f"Comfy: {self._comfy_state}")
 
         parts.append(snap.status_line())
+        sys_line, ram_critical = self._system_resources_line()
+        if sys_line:
+            parts.append(sys_line)
         self.status_bar.showMessage(" │ ".join(parts))
 
-        # Colore della status bar in base allo stato termico
-        color = {
-            ThermalState.COOL: "#8a8d96",
-            ThermalState.NORMAL: "#8a8d96",
-            ThermalState.WARM: "#d9a441",   # ambra: caldo ma sicuro
-            ThermalState.HOT: "#d96a6a",    # rosso: throttling hardware attivo
-        }.get(snap.thermal_state, "#8a8d96") if snap.available else "#8a8d96"
+        # Colore della status bar: RAM critica ha priorità (è la causa dei crash
+        # in caricamento), poi lo stato termico.
+        if ram_critical:
+            color = "#d96a6a"  # rosso: RAM quasi piena, rischio crash
+        else:
+            color = {
+                ThermalState.COOL: "#8a8d96",
+                ThermalState.NORMAL: "#8a8d96",
+                ThermalState.WARM: "#d9a441",   # ambra: caldo ma sicuro
+                ThermalState.HOT: "#d96a6a",    # rosso: throttling hardware attivo
+            }.get(snap.thermal_state, "#8a8d96") if snap.available else "#8a8d96"
         self.status_bar.setStyleSheet(f"QStatusBar {{ color: {color}; }}")
 
     def closeEvent(self, event) -> None:
@@ -570,14 +598,26 @@ class MainWindow(QMainWindow):
 
     def _maybe_show_first_run_dialog(self) -> None:
         """Wizard primo avvio: download modelli base."""
-        from src.utils.paths import get_models_dir
+        from src.utils.paths import get_models_dir, get_user_data_dir
 
         models_dir = get_models_dir()
-        has_any_model = (
-            models_dir.exists()
-            and any((models_dir / "base").glob("*/model_index.json"))
-            if (models_dir / "base").exists()
-            else False
+        # Riconosce un modello base se presente in QUALSIASI delle forme usate:
+        # - diffusers (cartella con model_index.json) sotto models/base/
+        # - checkpoint single-file .safetensors sotto models/checkpoints/
+        #   (la root "ufficiale" vista da ComfyUI via extra_model_paths)
+        # - checkpoint single-file dentro la cartella nativa di ComfyUI
+        comfy_ckpts = (
+            get_user_data_dir() / "engine" / "ComfyUI" / "models" / "checkpoints"
+        )
+        has_any_model = any(
+            (
+                (models_dir / "base").exists()
+                and any((models_dir / "base").glob("*/model_index.json")),
+                (models_dir / "checkpoints").exists()
+                and any((models_dir / "checkpoints").glob("*.safetensors")),
+                comfy_ckpts.exists()
+                and any(comfy_ckpts.glob("*.safetensors")),
+            )
         )
         if has_any_model:
             return

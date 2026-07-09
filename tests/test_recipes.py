@@ -13,7 +13,11 @@ def test_all_recipe_ids_present():
 def test_recipe_metadata_sane():
     for r in RECIPES.values():
         assert r.workflow_file.endswith(".json")
-        assert r.required_models
+        # required_models può essere vuoto (es. REFINE usa il modello base del
+        # progetto, non un checkpoint fisso del catalogo); se presente, dev'essere
+        # una lista di id stringa.
+        assert isinstance(r.required_models, list)
+        assert all(isinstance(m, str) for m in r.required_models)
         assert r.priority_phase >= 1
 
 

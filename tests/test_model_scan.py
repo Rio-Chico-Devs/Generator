@@ -170,8 +170,9 @@ def test_dangerous_pickle_global_opcode_os_system():
     assert r.verdict == ScanVerdict.DANGEROUS
     assert r.is_blocked
     assert not r.requires_override
-    # su Linux os.system → posix.system; entrambi in _DANGEROUS_MODULES
-    assert any("os" in i or "posix" in i for i in r.issues)
+    # os.system.__module__ è "posix" su Linux/macOS, "nt" su Windows;
+    # entrambi sono in _DANGEROUS_MODULES.
+    assert any("os" in i or "posix" in i or "nt" in i for i in r.issues)
 
 
 def test_dangerous_pickle_stack_global_os_system():
@@ -260,7 +261,7 @@ def test_summary_dangerous_contains_issue():
         r = scan_model_file(_save(d, "e.pt", pkl))
     s = r.summary()
     assert "DANGEROUS" in s
-    assert "os" in s or "posix" in s
+    assert "os" in s or "posix" in s or "nt" in s
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +275,7 @@ def test_findings_populated_on_dangerous():
         r = scan_model_file(_save(d, "e.pt", pkl))
     assert len(r.findings) >= 1
     f = r.findings[0]
-    assert f.module in ("os", "posix")
+    assert f.module in ("os", "posix", "nt")
     assert f.category == "esecuzione_comandi"
     assert f.opcode == "GLOBAL"
 

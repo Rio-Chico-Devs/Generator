@@ -436,10 +436,25 @@ def _load_manifest(project: Project) -> dict | None:
 
 
 def _find_base_model(project: Project, preset: TrainingPreset) -> Path | None:
-    """Cerca il checkpoint base nella cartella models/base/.
+    """Trova il checkpoint base su cui addestrare la LoRA.
 
-    Preferisce file .safetensors compatibili con la famiglia del preset."""
-    from src.utils.paths import get_models_dir
+    Ordine: prima il modello base DEL PROGETTO (lo stesso con cui genera),
+    cercato per nome nelle cartelle checkpoint reali; poi, come fallback,
+    file .safetensors in models/base/<famiglia>."""
+    from src.utils.paths import get_models_dir, get_user_data_dir
+
+    # 1. Modello del progetto: addestra sullo stesso checkpoint che usa per
+    #    generare, cercandolo dove vivono davvero i checkpoint (no copia in
+    #    models/base/ necessaria).
+    if project.base_model is not None:
+        fname = f"{project.base_model.id}.safetensors"
+        for d in (
+            get_models_dir() / "checkpoints",
+            get_user_data_dir() / "engine" / "ComfyUI" / "models" / "checkpoints",
+        ):
+            cand = d / fname
+            if cand.exists():
+                return cand
 
     base_dir = get_models_dir() / "base"
     if not base_dir.exists():
