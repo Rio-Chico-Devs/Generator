@@ -30,5 +30,11 @@
     "name_field": "lora_name",
     "model_weight_field": "strength_model",
     "clip_weight_field": "strength_clip"
-  }
+  },
+  "vae_decode": { "node": "8" },
+  "face_detailer_in": { "node": "32", "field": "image" },
+  "face_detailer_out": { "node": "32" },
+  "hand_detailer_in": { "node": "33", "field": "image" },
+  "hand_detailer_out": { "node": "33" },
+  "final_output": { "node": "9", "field": "images" }
 }

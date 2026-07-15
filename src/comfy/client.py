@@ -203,19 +203,13 @@ class ComfyClient:
                         if self._is_finished(prompt_id):
                             break  # completato, messaggio finale perso
                         if not self.is_alive():
-                            raise ComfyError(
-                                "ComfyUI non risponde più (possibile crash). "
-                                "Controlla logs/comfyui.log."
-                            )
+                            raise ComfyError(self._crash_message())
                         idle_since = time.monotonic()  # resetta per evitare re-trigger
                     continue
                 except websocket.WebSocketConnectionClosedException:
                     if self._is_finished(prompt_id):
                         break
-                    raise ComfyError(
-                        "Connessione a ComfyUI chiusa durante l'esecuzione "
-                        "(possibile crash). Controlla logs/comfyui.log."
-                    )
+                    raise ComfyError(self._crash_message())
 
                 if not isinstance(msg, str):
                     continue  # frame binario (anteprima) — ignora
@@ -260,6 +254,18 @@ class ComfyClient:
                 "per volta, o impostare comfy_vram_mode='lowvram'."
             )
         return ComfyError(f"Esecuzione fallita sul nodo '{node_type}': {exc_msg}")
+
+    def _crash_message(self) -> str:
+        """Messaggio per un possibile crash di ComfyUI: prova a riconoscere la
+        causa dalla coda del log (pagefile, RAM, VRAM) prima del generico."""
+        from src.comfy.diagnostics import diagnose
+        from src.utils.paths import get_app_data_dir
+
+        log_path = get_app_data_dir() / "logs" / "comfyui.log"
+        return diagnose(log_path) or (
+            "Connessione a ComfyUI chiusa durante l'esecuzione (possibile "
+            "crash). Controlla logs/comfyui.log."
+        )
 
     def _is_finished(self, prompt_id: str) -> bool:
         """True se il prompt risulta completato in history."""

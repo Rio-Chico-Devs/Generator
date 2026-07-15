@@ -322,7 +322,7 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
             "a personaggio'."
         ),
         min_vram_gb=1.0,
-        required_for_phase=99,
+        required_for_phase=7,
         commercial_use_ok=True,
     ),
 
@@ -344,6 +344,49 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
         ),
         min_vram_gb=0.2,
         required_for_phase=1,  # serve per Pose Library (estrazione scheletro)
+        commercial_use_ok=True,
+    ),
+
+    # --- ADetailer: correzione automatica volto/mani (usata da BASE e "Posa da foto") ---
+
+    "adetailer-face-yolov8m": AuxModelEntry(
+        id="adetailer-face-yolov8m",
+        name="ADetailer face_yolov8m",
+        kind="detector",
+        repo_id="Bingsu/adetailer",
+        filename="face_yolov8m.pt",
+        comfy_subdir="ultralytics/bbox",
+        size_gb=0.05,
+        license="AGPL-3.0",
+        license_url="https://huggingface.co/Bingsu/adetailer/blob/main/LICENSE",
+        description=(
+            "Rileva i volti nell'immagine generata per il ridisegno locale "
+            "(FaceDetailer di ComfyUI-Impact-Pack). Gestito dal nodo "
+            "UltralyticsDetectorProvider; richiede il custom node "
+            "ComfyUI-Impact-Pack installato."
+        ),
+        min_vram_gb=0.3,
+        required_for_phase=1,
+        commercial_use_ok=True,
+    ),
+
+    "adetailer-hand-yolov8s": AuxModelEntry(
+        id="adetailer-hand-yolov8s",
+        name="ADetailer hand_yolov8s",
+        kind="detector",
+        repo_id="Bingsu/adetailer",
+        filename="hand_yolov8s.pt",
+        comfy_subdir="ultralytics/bbox",
+        size_gb=0.02,
+        license="AGPL-3.0",
+        license_url="https://huggingface.co/Bingsu/adetailer/blob/main/LICENSE",
+        description=(
+            "Rileva le mani nell'immagine generata per il ridisegno locale "
+            "(FaceDetailer di ComfyUI-Impact-Pack, riusato con detector mani). "
+            "Richiede il custom node ComfyUI-Impact-Pack installato."
+        ),
+        min_vram_gb=0.3,
+        required_for_phase=1,
         commercial_use_ok=True,
     ),
 

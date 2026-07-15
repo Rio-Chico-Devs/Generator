@@ -634,6 +634,22 @@ class GenerateView(QWidget):
         cfg_row.addWidget(self.cfg_spin, 1)
         adv.addLayout(cfg_row)
 
+        self.autofix_face_check = QCheckBox("Correggi volto (ADetailer)")
+        self.autofix_face_check.setChecked(True)
+        self.autofix_face_check.setToolTip(
+            "Ridisegna il volto in dettaglio con un secondo passaggio locale.\n"
+            "Richiede il custom node ComfyUI-Impact-Pack installato."
+        )
+        adv.addWidget(self.autofix_face_check)
+
+        self.autofix_hands_check = QCheckBox("Correggi mani (ADetailer)")
+        self.autofix_hands_check.setChecked(True)
+        self.autofix_hands_check.setToolTip(
+            "Ridisegna le mani in dettaglio con un secondo passaggio locale.\n"
+            "Richiede il custom node ComfyUI-Impact-Pack installato."
+        )
+        adv.addWidget(self.autofix_hands_check)
+
         self._adv_widget.setVisible(False)
         v.addWidget(self._adv_widget)
         return box
@@ -758,6 +774,8 @@ class GenerateView(QWidget):
             "depth_weight": self.depth_weight_slider.value() / 100.0,
             "lora_weight": extra_loras[0][1] if extra_loras else 0.85,
             "loras": [{"path": p, "weight": float(w)} for p, w in extra_loras],
+            "autofix_face": "yes" if self.autofix_face_check.isChecked() else "no",
+            "autofix_hands": "yes" if self.autofix_hands_check.isChecked() else "no",
         }
         per_image = self._collect_form().estimate().per_image
         if not self._wallet.can_afford(per_image):
@@ -935,6 +953,8 @@ class GenerateView(QWidget):
             upscale_factor=float(factor),
             extra_lora_count=len(extra_loras),
             extra_loras=extra_loras,
+            autofix_face=self.autofix_face_check.isChecked(),
+            autofix_hands=self.autofix_hands_check.isChecked(),
         )
 
     def _on_prompt_changed(self) -> None:

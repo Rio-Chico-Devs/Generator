@@ -147,6 +147,8 @@ class GenerationForm:
     upscale_factor: float = 1.0
     use_controlnet: bool = False
     use_ipadapter: bool = False
+    autofix_face: bool = True
+    autofix_hands: bool = True
     # LoRA extra selezionati dall'utente (oltre a quello del progetto).
     # extra_lora_count guida la stima costo; extra_loras porta i path/peso reali
     # passati al worker per lo stacking. La UI tiene i due allineati.
@@ -173,6 +175,8 @@ class GenerationForm:
                 {"path": path, "weight": float(weight)}
                 for path, weight in self.extra_loras
             ],
+            "autofix_face": "yes" if self.autofix_face else "no",
+            "autofix_hands": "yes" if self.autofix_hands else "no",
         }
 
     def to_generation_config(self) -> GenerationConfig:

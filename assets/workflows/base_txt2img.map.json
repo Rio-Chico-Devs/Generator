@@ -17,5 +17,17 @@
     "name_field": "lora_name",
     "model_weight_field": "strength_model",
     "clip_weight_field": "strength_clip"
-  }
+  },
+  "_meta_adetailer": {
+    "requires_custom_nodes": [
+      "ComfyUI-Impact-Pack (nodi UltralyticsDetectorProvider + FaceDetailer)"
+    ],
+    "note": "Correzione automatica volto/mani: se autofix_face/autofix_hands sono 'no', il worker rewira SaveImage saltando il/i nodo/i FaceDetailer corrispondenti (nessun costo di calcolo su un ramo non usato). Nodi FaceDetailer non ancora validati su ComfyUI reale: i campi vanno verificati contro la versione di Impact-Pack installata (cambiano tra release)."
+  },
+  "vae_decode": { "node": "8" },
+  "face_detailer_in": { "node": "32", "field": "image" },
+  "face_detailer_out": { "node": "32" },
+  "hand_detailer_in": { "node": "33", "field": "image" },
+  "hand_detailer_out": { "node": "33" },
+  "final_output": { "node": "9", "field": "images" }
 }

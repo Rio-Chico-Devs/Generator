@@ -13,69 +13,92 @@ Glossario rapido:
 
 ---
 
-## Ricetta A — Personaggio in posa (PRIORITÀ 1)
+## Ricetta A — Posa da foto (PRIORITÀ 1, implementata)
 
 ### Obiettivo
-Dato: una posa di riferimento + un'immagine del personaggio + lo stile
-di Bru. Produrre: il personaggio nella posa esatta, nello stile di Bru,
-con anatomia corretta.
+Dato: una foto/disegno di riferimento in una posa + un personaggio già
+definito da una LoRA (progetto attivo). Produrre: quel personaggio
+ridisegnato nella stessa posa, nel suo stile — identità e accessori
+restano quelli della LoRA, cambia solo la posizione.
+
+### Perché niente IP-Adapter FaceID
+La prima versione di questa ricetta usava IP-Adapter FaceID per mantenere
+l'identità da 1-3 foto di un volto. È stato rimosso: l'identità del
+personaggio arriva già dalla sua LoRA, non da una foto reference. Così la
+ricetta funziona con QUALSIASI personaggio con LoRA attiva, non solo con
+chi ha foto di un volto reale a disposizione. IP-Adapter FaceID resta in
+catalogo (`ipadapter-faceid-plus-v2`) per un futuro caso d'uso diverso
+("da foto vera a personaggio"), ma non è usato qui.
 
 ### Input utente
-1. Posa (da Pose Library o upload al volo) — foto, sketch, qualsiasi cosa
-2. Personaggio di riferimento (1-3 immagini per consistenza facciale)
-3. Prompt testuale (cosa fa, dove, atmosfera)
-4. Progetto attivo (determina LoRA stile)
+1. Foto di riferimento (qualsiasi posa/inquadratura)
+2. Prompt testuale (cosa fa, dove, atmosfera)
+3. Progetto attivo con LoRA personaggio impostata
 
 ### Pipeline ComfyUI
 
 ```
-┌─ Posa reference
+┌─ Foto reference
+│      ├─→ DWPose Estimator → scheletro
+│      │        ↓
+│      │   ControlNet Apply (OpenPose SDXL, weight 0.5 — moderato apposta:
+│      │        troppo alto irrigidisce l'anatomia sullo scheletro estratto)
+│      │        ↓
+│      └─→ MiDaS Depth → mappa di profondità
+│               ↓
+│          ControlNet Apply (Depth SDXL, weight 0.3 — rinforzo leggero,
+│               non vincolante da solo)
+│               ↓
+├─ Stile + identità (LoRA personaggio del progetto, weight 0.85)
 │      ↓
-│   DWPose Estimator
-│      ↓ (scheletro: joints + bones)
-│   ControlNet Apply (OpenPose model, weight 0.8-1.0)
-│      ↓
-├─ Personaggio reference
-│      ↓
-│   IP-Adapter FaceID Plus v2 (weight 0.6-0.8)
-│      ↓
-├─ Stile (LoRA Bru)
-│      ↓
-│   Load LoRA (weight 0.85)
-│      ↓
-└──→ Modello base (Pony V6 XL) + tutti i condizionamenti
+└──→ Modello base (SDXL) + conditioning posa+depth
        ↓
      KSampler (DPM++ 2M Karras, 30 step, CFG 7)
        ↓
      VAE Decode → immagine grezza
        ↓
-     Adetailer face (rileva volto, re-inferenza ad alta risoluzione)
+     FaceDetailer volto (UltralyticsDetectorProvider face_yolov8m)
        ↓
-     Adetailer hand (rileva mani, re-inferenza con hand-refiner)
-       ↓
-     [opzionale] Upscale 2x (Real-ESRGAN)
+     FaceDetailer mani (UltralyticsDetectorProvider hand_yolov8s)
        ↓
      Output finale
 ```
 
+I due FaceDetailer sono attivabili/disattivabili singolarmente
+(`autofix_face`/`autofix_hands`): quando disattivati, `SaveImage` legge
+direttamente da uno stadio precedente — il nodo resta nel grafo ma
+ComfyUI non lo esegue (nessun costo).
+
 ### Parametri chiave e perché
-- **ControlNet weight 0.8-1.0**: alto perché la posa deve essere fedele.
-  Se troppo alto (>1.0) può "congelare" anche dettagli indesiderati.
-- **IP-Adapter weight 0.6-0.8**: medio. Troppo alto e il personaggio
-  domina sullo stile; troppo basso e perde identità.
-- **LoRA weight 0.85**: leggermente sotto 1.0 per lasciare al modello
-  base un margine di coerenza anatomica.
-- **Adetailer**: cruciale. Senza, le mani sono il punto debole numero
-  uno. Con hand-refiner ControlNet dedicato, drasticamente migliori.
+- **ControlNet posa weight 0.5**: deliberatamente sotto lo storico 0.9.
+  Ad alta forza il modello segue lo scheletro alla lettera anche quando è
+  anatomicamente imperfetto (foto scattate a mano libera); a 0.5 segue la
+  direzione generale lasciando al modello margine per correggere.
+- **ControlNet depth weight 0.3**: rinforza le proporzioni/profondità
+  senza aggiungere rigidità propria — è un aiuto, non un vincolo.
+- **LoRA weight 0.85**: come nelle altre ricette, margine per la coerenza
+  anatomica del modello base.
 
 ### Difetti gestiti
-- Mani deformi → Adetailer hand + hand-refiner ControlNet
-- Volto incoerente tra generazioni → IP-Adapter FaceID
-- Posa imprecisa → ControlNet weight tuning
+- Anatomia storta da ControlNet troppo rigido → pesi posa/depth bassi,
+  regolabili in UI
+- Mani/volto imprecisi → FaceDetailer dedicati (disattivabili)
 - Stile diluito → LoRA weight + trigger tag nel prompt
 
-### Fedeltà attesa
-Posa: 85-92% | Personaggio: 80-88% | Stile: 90-95%
+### Dipendenze (custom node, non incluse in ComfyUI base)
+- `comfyui_controlnet_aux` (DWPreprocessor, MiDaS-DepthMapPreprocessor)
+- `ComfyUI-Impact-Pack` + `ComfyUI-Impact-Subpack` (FaceDetailer,
+  UltralyticsDetectorProvider — il detector Ultralytics è spesso in un
+  repo companion separato per via della licenza AGPL)
+- Modelli: `controlnet-openpose-sdxl`, `controlnet-depth-sdxl`,
+  `adetailer-face-yolov8m`, `adetailer-hand-yolov8s` (vedi
+  `src/core/catalog.py` → `AUX_CATALOG` per repo/filename esatti)
+
+I nomi dei nodi/campi Impact-Pack variano tra versioni: se dopo
+l'installazione ComfyUI segnala un nodo non trovato o un campo mancante,
+verificare la firma esatta della versione installata e aggiornare
+`assets/workflows/base_txt2img.json` / `character_in_pose.json` di
+conseguenza.
 
 ---
 

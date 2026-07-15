@@ -265,7 +265,7 @@ class RecipeWorker(QThread):
 # a set_role nel loop residuo.
 _HANDLED_KEYS = frozenset(
     {"prompt", "scene_prompt", "negative", "seed", "width", "height",
-     "lora_weight", "loras", "variants", "batch"}
+     "lora_weight", "loras", "variants", "batch", "autofix_face", "autofix_hands"}
 )
 
 
@@ -387,6 +387,12 @@ def _parametrize(
         node_spec = wf.mapping.get(inp.key)
         if node_spec and "node" in node_spec:
             wf.set_input_image(node_spec["node"], dest_name)
+
+    # 6b. ADetailer (volto/mani): collega o salta i nodi FaceDetailer in base
+    #     alla scelta utente. No-op sui workflow che non li hanno (mapping
+    #     assente) — nessun nodo inutile viene eseguito quando bypassato,
+    #     ComfyUI esegue solo il ramo raggiungibile da SaveImage.
+    _wire_autofix(wf, user_params)
 
     # 7. Knob numerici residui (steps, cfg, denoise…)
     #    Passati via set_role se presenti nel mapping; chiavi sconosciute ignorate.
@@ -511,6 +517,37 @@ def _safe_set_dimensions(wf: WorkflowTemplate, width: int, height: int) -> None:
         wf.set_dimensions(width, height)
     except KeyError as exc:
         logger.warning("Mapping dimensioni mancante nel workflow: %s", exc)
+
+
+def _wire_autofix(wf: WorkflowTemplate, user_params: dict[str, Any]) -> None:
+    """Collega o salta i FaceDetailer (ADetailer) volto/mani in base alle
+    scelte utente ("yes"/"no", default "yes").
+
+    Il grafo ha SEMPRE entrambi i nodi FaceDetailer: qui si sceglie solo da
+    dove legge SaveImage. Un ramo non raggiunto da SaveImage non viene
+    eseguito da ComfyUI, quindi disattivare un fix costa zero, non serve
+    rimuovere nodi. Se il workflow non ha questi ruoli mappati (workflow più
+    vecchi, es. refine/inpaint), non fa nulla."""
+    final_spec = wf.mapping.get("final_output")
+    vae_spec = wf.mapping.get("vae_decode")
+    face_in = wf.mapping.get("face_detailer_in")
+    face_out = wf.mapping.get("face_detailer_out")
+    hand_in = wf.mapping.get("hand_detailer_in")
+    hand_out = wf.mapping.get("hand_detailer_out")
+    if not (final_spec and vae_spec and face_in and face_out and hand_in and hand_out):
+        return
+
+    want_face = str(user_params.get("autofix_face", "yes")).lower() != "no"
+    want_hands = str(user_params.get("autofix_hands", "yes")).lower() != "no"
+
+    source = [vae_spec["node"], 0]
+    if want_face:
+        wf.set_param(face_in["node"], face_in["field"], source)
+        source = [face_out["node"], 0]
+    if want_hands:
+        wf.set_param(hand_in["node"], hand_in["field"], source)
+        source = [hand_out["node"], 0]
+    wf.set_param(final_spec["node"], final_spec["field"], source)
 
 
 def _collect_lora_specs(

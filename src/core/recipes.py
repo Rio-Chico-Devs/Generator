@@ -69,6 +69,12 @@ RECIPES: dict[RecipeId, RecipeDef] = {
                         help="-1 = casuale"),
             RecipeInput("lora_weight", "Forza stile", "number", default=0.85,
                         advanced=True),
+            RecipeInput("autofix_face", "Correggi volto", "choice",
+                        default="yes", choices=["yes", "no"], advanced=True,
+                        help="Ridisegna il volto in dettaglio (ADetailer)"),
+            RecipeInput("autofix_hands", "Correggi mani", "choice",
+                        default="yes", choices=["yes", "no"], advanced=True,
+                        help="Ridisegna le mani in dettaglio (ADetailer)"),
         ],
     ),
     RecipeId.CHARACTER_IN_POSE: RecipeDef(
