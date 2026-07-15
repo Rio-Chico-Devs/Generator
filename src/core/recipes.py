@@ -73,30 +73,31 @@ RECIPES: dict[RecipeId, RecipeDef] = {
     ),
     RecipeId.CHARACTER_IN_POSE: RecipeDef(
         id=RecipeId.CHARACTER_IN_POSE,
-        name="Personaggio in posa",
+        name="Posa da foto",
         description=(
-            "Metti il tuo personaggio in una posa scelta, nel tuo stile, "
-            "con anatomia corretta."
+            "Ridisegna il tuo personaggio (LoRA attiva) nella stessa posa di "
+            "una foto di riferimento, nel tuo stile — accessori e identità "
+            "restano quelli del personaggio, cambia solo la posizione."
         ),
         workflow_file="character_in_pose.json",
         required_models=[
             "pony-v6-xl",
             "controlnet-openpose-sdxl",
-            "ipadapter-faceid-plus-v2",
+            "controlnet-depth-sdxl",
         ],
-        priority_phase=3,
+        priority_phase=1,
         inputs=[
-            RecipeInput("pose", "Posa", "pose",
-                        help="Scegli dalla Pose Library o carica un'immagine"),
-            RecipeInput("character", "Personaggio", "character",
-                        help="1-3 immagini del personaggio"),
+            RecipeInput("pose", "Foto di riferimento", "pose",
+                        help="Una foto o disegno nella posa che vuoi replicare"),
             RecipeInput("prompt", "Descrizione", "text"),
             RecipeInput("negative", "Da evitare", "text", required=False,
                         default="low quality, worst quality, bad hands, deformed"),
-            RecipeInput("pose_weight", "Fedeltà posa", "number", default=0.9,
-                        advanced=True),
-            RecipeInput("face_weight", "Fedeltà personaggio", "number",
-                        default=0.7, advanced=True),
+            RecipeInput("pose_weight", "Fedeltà posa", "number", default=0.5,
+                        advanced=True,
+                        help="Bassa = più libertà anatomica, alta = segue lo scheletro alla lettera"),
+            RecipeInput("depth_weight", "Coerenza spaziale", "number",
+                        default=0.3, advanced=True,
+                        help="Rinforza le proporzioni/profondità senza irrigidire la posa"),
             RecipeInput("lora_weight", "Forza stile", "number", default=0.85,
                         advanced=True),
             RecipeInput("autofix_hands", "Correggi mani", "choice",

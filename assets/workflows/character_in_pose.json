@@ -46,36 +46,6 @@
       "control_net_name": "controlnet-pose-sdxl-1.0.safetensors"
     }
   },
-  "23": {
-    "class_type": "LoadImage",
-    "inputs": {
-      "image": "character.png"
-    }
-  },
-  "30": {
-    "class_type": "IPAdapterUnifiedLoaderFaceID",
-    "inputs": {
-      "model": ["10", 0],
-      "preset": "FACEID PLUS V2",
-      "lora_strength": 0.6,
-      "provider": "CPU"
-    }
-  },
-  "31": {
-    "class_type": "IPAdapterFaceID",
-    "inputs": {
-      "model": ["30", 0],
-      "ipadapter": ["30", 1],
-      "image": ["23", 0],
-      "weight": 0.7,
-      "weight_faceidv2": 1.0,
-      "weight_type": "linear",
-      "combine_embeds": "concat",
-      "start_at": 0.0,
-      "end_at": 1.0,
-      "embeds_scaling": "V only"
-    }
-  },
   "6": {
     "class_type": "CLIPTextEncode",
     "inputs": {
@@ -97,7 +67,34 @@
       "negative": ["7", 0],
       "control_net": ["22", 0],
       "image": ["21", 0],
-      "strength": 0.9,
+      "strength": 0.5,
+      "start_percent": 0.0,
+      "end_percent": 1.0
+    }
+  },
+  "25": {
+    "class_type": "MiDaS-DepthMapPreprocessor",
+    "inputs": {
+      "image": ["20", 0],
+      "a": 6.28,
+      "bg_threshold": 0.1,
+      "resolution": 1024
+    }
+  },
+  "26": {
+    "class_type": "ControlNetLoader",
+    "inputs": {
+      "control_net_name": "controlnet-depth-sdxl-1.0.safetensors"
+    }
+  },
+  "27": {
+    "class_type": "ControlNetApplyAdvanced",
+    "inputs": {
+      "positive": ["24", 0],
+      "negative": ["24", 1],
+      "control_net": ["26", 0],
+      "image": ["25", 0],
+      "strength": 0.3,
       "start_percent": 0.0,
       "end_percent": 1.0
     }
@@ -119,9 +116,9 @@
       "sampler_name": "dpmpp_2m",
       "scheduler": "karras",
       "denoise": 1.0,
-      "model": ["31", 0],
-      "positive": ["24", 0],
-      "negative": ["24", 1],
+      "model": ["10", 0],
+      "positive": ["27", 0],
+      "negative": ["27", 1],
       "latent_image": ["5", 0]
     }
   },

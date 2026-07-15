@@ -283,6 +283,27 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
         commercial_use_ok=True,
     ),
 
+    "controlnet-depth-sdxl": AuxModelEntry(
+        id="controlnet-depth-sdxl",
+        name="ControlNet Depth SDXL",
+        kind="controlnet",
+        repo_id="diffusers/controlnet-depth-sdxl-1.0",
+        filename="diffusion_pytorch_model.fp16.safetensors",
+        comfy_subdir="controlnet",
+        size_gb=2.5,
+        license="OpenRAIL",
+        license_url="https://huggingface.co/diffusers/controlnet-depth-sdxl-1.0/blob/main/LICENSE.md",
+        description=(
+            "Rinforza le proporzioni/profondità a fianco della posa (OpenPose), "
+            "usato a peso basso per correggere l'anatomia senza irrigidire la "
+            "posa. Input: mappa di profondità estratta da MiDaS. Usato in "
+            "Ricetta 'Posa da foto'."
+        ),
+        min_vram_gb=2.5,
+        required_for_phase=1,
+        commercial_use_ok=True,
+    ),
+
     "ipadapter-faceid-plus-v2": AuxModelEntry(
         id="ipadapter-faceid-plus-v2",
         name="IP-Adapter FaceID Plus v2 SDXL",
@@ -294,12 +315,14 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
         license="Apache-2.0",
         license_url="https://huggingface.co/h94/IP-Adapter-FaceID/blob/main/LICENSE",
         description=(
-            "Mantiene l'identità visiva del personaggio (volto + caratteristiche) "
-            "attraverso i frame generati. Input: 1-3 immagini reference del personaggio. "
-            "Usato in Ricetta A."
+            "Mantiene l'identità visiva di un volto reale (foto) attraverso i "
+            "frame generati. Non usato da nessuna ricetta attiva: 'Posa da "
+            "foto' usa la LoRA del personaggio per l'identità, non foto di "
+            "volto. Tenuto in catalogo per un futuro caso d'uso 'da foto vera "
+            "a personaggio'."
         ),
         min_vram_gb=1.0,
-        required_for_phase=3,
+        required_for_phase=99,
         commercial_use_ok=True,
     ),
 

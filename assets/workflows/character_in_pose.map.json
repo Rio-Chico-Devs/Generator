@@ -1,13 +1,12 @@
 {
   "_meta": {
     "recipe": "character_in_pose",
-    "phase": 3,
+    "phase": 1,
     "requires_custom_nodes": [
-      "comfyui_controlnet_aux (nodo DWPreprocessor + onnx yolox_l / dw-ll_ucoco_384)",
-      "ComfyUI_IPAdapter_plus (nodi IPAdapterUnifiedLoaderFaceID + IPAdapterFaceID, richiede insightface)"
+      "comfyui_controlnet_aux (nodi DWPreprocessor + MiDaS-DepthMapPreprocessor + onnx yolox_l / dw-ll_ucoco_384)"
     ],
     "validate_on_real_comfy": true,
-    "note": "Pipeline: posa (DWPose->ControlNet OpenPose) + identità personaggio (IPAdapter FaceID Plus v2) + stile (LoRA). I class_type dei nodi custom vanno verificati contro le versioni installate: cambiano tra fork. 'pose' è una reference image (verrà estratto lo scheletro); 'character' sono 1-3 immagini del volto. autofix_hands/autofix_face non sono ancora nel grafo (futuri: FaceDetailer/Impact Pack)."
+    "note": "Pipeline: posa (DWPose->ControlNet OpenPose, forza moderata) + profondità (MiDaS->ControlNet Depth, rinforzo leggero) + identità/stile del personaggio via LoRA (già in uso nel progetto). Niente IPAdapter FaceID: l'identità del personaggio è quella imparata dalla sua LoRA, non una foto di volto — così il modificatore di posa si applica a QUALSIASI personaggio con LoRA attiva. I class_type dei nodi custom vanno verificati contro le versioni installate: cambiano tra fork. 'pose' è la foto di riferimento (verrà estratto scheletro + mappa di profondità dalla stessa immagine). autofix_hands/autofix_face non sono ancora nel grafo (futuri: FaceDetailer/Impact Pack)."
   },
   "checkpoint": { "node": "4", "field": "ckpt_name" },
   "positive_prompt": { "node": "6", "field": "text" },
@@ -22,10 +21,10 @@
   "width": { "node": "5", "field": "width" },
   "height": { "node": "5", "field": "height" },
   "pose": { "node": "20" },
-  "character": { "node": "23" },
   "pose_weight": { "node": "24", "field": "strength" },
-  "face_weight": { "node": "31", "field": "weight" },
-  "controlnet": { "node": "22", "field": "control_net_name" },
+  "depth_weight": { "node": "27", "field": "strength" },
+  "pose_controlnet": { "node": "22", "field": "control_net_name" },
+  "depth_controlnet": { "node": "26", "field": "control_net_name" },
   "lora": {
     "node": "10",
     "name_field": "lora_name",
