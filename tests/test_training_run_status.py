@@ -87,13 +87,23 @@ class TestIsResumable:
         rs = RunStatus(status=STATUS_DONE)
         assert not rs.is_resumable
 
-    def test_not_resumable_when_aborted_no_checkpoint(self):
-        rs = RunStatus(status=STATUS_ABORTED, last_checkpoint_path=None)
+    def test_not_resumable_when_aborted_no_state_dir(self):
+        rs = RunStatus(status=STATUS_ABORTED, last_state_dir=None)
         assert not rs.is_resumable
 
-    def test_resumable_when_aborted_with_checkpoint(self):
-        rs = RunStatus(status=STATUS_ABORTED, last_checkpoint_path="/tmp/lora.safetensors")
+    def test_resumable_when_aborted_with_state_dir(self):
+        rs = RunStatus(status=STATUS_ABORTED, last_state_dir="/tmp/lora-000002-state")
         assert rs.is_resumable
+
+    def test_not_resumable_with_only_checkpoint_no_state_dir(self):
+        """Il solo file .safetensors non basta: --resume di sd-scripts vuole
+        la cartella di stato (ottimizzatore/scheduler/RNG), non i pesi."""
+        rs = RunStatus(
+            status=STATUS_ABORTED,
+            last_checkpoint_path="/tmp/lora.safetensors",
+            last_state_dir=None,
+        )
+        assert not rs.is_resumable
 
     def test_not_resumable_when_error(self):
         rs = RunStatus(status=STATUS_ERROR)
@@ -289,6 +299,7 @@ class TestLoadAll:
             run_id="aborted_run",
             status=STATUS_ABORTED,
             last_checkpoint_path="/tmp/lora.safetensors",
+            last_state_dir="/tmp/lora-000002-state",
         )
         rs.save(run_dir)
         runs = RunStatus.load_all(runs_dir)

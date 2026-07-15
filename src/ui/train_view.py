@@ -372,7 +372,7 @@ class TrainView(QWidget):
         preset_id = PresetId(resumable.preset_id) if resumable.preset_id else PresetId.STANDARD
         params = TrainingParams(
             epochs=resumable.max_epochs,
-            resume_from=Path(resumable.last_checkpoint_path) if resumable.last_checkpoint_path else None,
+            resume_from=Path(resumable.last_state_dir) if resumable.last_state_dir else None,
         )
         self._resume_banner.setVisible(False)
         self._start_training(preset_id, params)
