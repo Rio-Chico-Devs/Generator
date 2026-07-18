@@ -181,6 +181,16 @@ class RecipeWorker(QThread):
                 seed_i = (base_seed + i) if user_gave_seed else resolve_seed(-1)
                 wf.set_seed(seed_i)
 
+                # Scarica il modello precedente PRIMA di caricarne uno nuovo:
+                # su PC con poca RAM, tenerli entrambi in memoria durante la
+                # transizione è ciò che spinge la RAM al limite e causa i
+                # crash in caricamento (alternativa non invasiva al pagefile,
+                # non richiede modifiche di sistema). Non fatale se fallisce.
+                try:
+                    self._client.free_memory()
+                except Exception as exc:
+                    logger.warning("free_memory() prima del submit fallita: %s", exc)
+
                 prompt_id = self._client.submit(wf.build())
                 logger.info(
                     "Ricetta '%s' img %d/%d sottomessa — prompt_id=%s seed=%d",

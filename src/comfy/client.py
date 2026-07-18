@@ -89,6 +89,7 @@ class ComfyClientProtocol(Protocol):
     def interrupt(self) -> None: ...
     def clear_queue(self) -> None: ...
     def get_vram_usage(self) -> dict: ...
+    def free_memory(self) -> None: ...
 
 
 class ComfyClient:
@@ -304,6 +305,33 @@ class ComfyClient:
         except Exception as exc:
             logger.warning("clear_queue() HTTP error: %s", exc)
 
+    def free_memory(self) -> None:
+        """Chiede a ComfyUI di scaricare i modelli caricati e liberare
+        memoria (endpoint nativo ``POST /free``).
+
+        Su PC con poca RAM, tenere il checkpoint precedente ancora in memoria
+        mentre se ne carica uno nuovo (es. prima del refine, o tra una
+        generazione e l'altra) è ciò che spinge la RAM al limite e causa i
+        crash in caricamento. Chiamarlo prima di ogni submit riduce la
+        pressione di memoria senza richiedere modifiche di sistema (pagefile
+        ecc.) — non fatale se fallisce: la generazione prosegue comunque."""
+        import json
+        import urllib.request
+
+        payload = json.dumps(
+            {"unload_models": True, "free_memory": True}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base}/free",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15):
+                pass
+        except Exception as exc:
+            logger.warning("free_memory() fallita (non fatale): %s", exc)
+
     def get_vram_usage(self) -> dict:
         """GET /system_stats per la status bar. Ritorna {} se irraggiungibile."""
         import urllib.error
@@ -388,6 +416,9 @@ class MockComfyClient:
         pass
 
     def clear_queue(self) -> None:
+        pass
+
+    def free_memory(self) -> None:
         pass
 
     def get_vram_usage(self) -> dict:
