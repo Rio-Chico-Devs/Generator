@@ -102,8 +102,10 @@ RECIPES: dict[RecipeId, RecipeDef] = {
                         advanced=True,
                         help="Bassa = più libertà anatomica, alta = segue lo scheletro alla lettera"),
             RecipeInput("depth_weight", "Coerenza spaziale", "number",
-                        default=0.3, advanced=True,
-                        help="Rinforza le proporzioni/profondità senza irrigidire la posa"),
+                        default=0.0, advanced=True,
+                        help="Rinforza le proporzioni/profondità senza irrigidire la posa. "
+                             "0 = disattivo (default): il preprocessore MiDaS richiede "
+                             "torch>=2.6, non ancora supportato su questo setup."),
             RecipeInput("lora_weight", "Forza stile", "number", default=0.85,
                         advanced=True),
             RecipeInput("autofix_hands", "Correggi mani", "choice",

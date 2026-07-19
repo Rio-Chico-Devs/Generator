@@ -404,6 +404,14 @@ def _parametrize(
     #     ComfyUI esegue solo il ramo raggiungibile da SaveImage.
     _wire_autofix(wf, user_params)
 
+    # 6c. Depth ControlNet (rinforzo opzionale in "Posa da foto"): salta
+    #     l'intero ramo MiDaS->ControlNet se depth_weight<=0, cosa diversa
+    #     da mettere la sola forza a 0 — qui il nodo MiDaS non viene proprio
+    #     eseguito, quindi non serve nemmeno che funzioni (utile finché
+    #     richiede torch>=2.6 e non lo si vuole aggiornare). No-op sui
+    #     workflow senza questi ruoli mappati.
+    _wire_depth_bypass(wf, user_params)
+
     # 7. Knob numerici residui (steps, cfg, denoise…)
     #    Passati via set_role se presenti nel mapping; chiavi sconosciute ignorate.
     for key, value in user_params.items():
@@ -558,6 +566,32 @@ def _wire_autofix(wf: WorkflowTemplate, user_params: dict[str, Any]) -> None:
         wf.set_param(hand_in["node"], hand_in["field"], source)
         source = [hand_out["node"], 0]
     wf.set_param(final_spec["node"], final_spec["field"], source)
+
+
+def _wire_depth_bypass(wf: WorkflowTemplate, user_params: dict[str, Any]) -> None:
+    """Salta l'intero ramo depth ControlNet (MiDaS + ControlNetApply) se
+    ``depth_weight`` è 0 o assente: il KSampler legge il conditioning da
+    prima del passaggio depth invece che da dopo.
+
+    Diverso dal solo mettere la forza a 0: qui il nodo MiDaS non viene
+    proprio eseguito da ComfyUI (non reachable dall'output), quindi non
+    serve nemmeno che sia installato/funzionante. Non fa nulla sui workflow
+    senza questi ruoli mappati (es. refine/inpaint/base)."""
+    ks_pos = wf.mapping.get("ksampler_positive_in")
+    ks_neg = wf.mapping.get("ksampler_negative_in")
+    pose_out = wf.mapping.get("pose_conditioning_out")
+    depth_out = wf.mapping.get("depth_conditioning_out")
+    if not (ks_pos and ks_neg and pose_out and depth_out):
+        return
+
+    try:
+        depth_weight = float(user_params.get("depth_weight", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        depth_weight = 0.0
+
+    source = depth_out["node"] if depth_weight > 0.0 else pose_out["node"]
+    wf.set_param(ks_pos["node"], ks_pos["field"], [source, 0])
+    wf.set_param(ks_neg["node"], ks_neg["field"], [source, 1])
 
 
 def _collect_lora_specs(

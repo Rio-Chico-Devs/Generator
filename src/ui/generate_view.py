@@ -700,19 +700,27 @@ class GenerateView(QWidget):
         self.depth_weight_slider = QSlider(Qt.Orientation.Horizontal)
         self.depth_weight_slider.setMinimum(0)
         self.depth_weight_slider.setMaximum(100)
-        self.depth_weight_slider.setValue(30)
+        self.depth_weight_slider.setValue(0)
+        self.depth_weight_slider.setToolTip(
+            "Temporaneamente disattivato di default: il preprocessore MiDaS "
+            "richiede torch>=2.6 (non presente su questo setup). A 0 il "
+            "passaggio depth viene saltato del tutto — alzalo solo se hai "
+            "aggiornato torch e verificato che funzioni."
+        )
         self.depth_weight_slider.valueChanged.connect(
             lambda v_: self.depth_weight_label.setText(f"{v_ / 100:.2f}")
         )
         dw_row.addWidget(self.depth_weight_slider, 1)
-        self.depth_weight_label = QLabel("0.30")
+        self.depth_weight_label = QLabel("0.00")
         self.depth_weight_label.setFixedWidth(34)
         dw_row.addWidget(self.depth_weight_label)
         v.addLayout(dw_row)
 
         slider_hint = QLabel(
             "Bassa fedeltà posa = più libertà anatomica al modello. "
-            "Se l'anatomia esce storta, abbassa entrambi gli slider."
+            "Se l'anatomia esce storta, abbassa entrambi gli slider. "
+            "\"Coerenza spaziale\" è disattivata di default (0) per un "
+            "problema noto del preprocessore — lasciala a 0."
         )
         slider_hint.setWordWrap(True)
         slider_hint.setStyleSheet("color: #8a8d96; font-size: 10px;")
