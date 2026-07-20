@@ -90,6 +90,11 @@ def generate_toml(
         # Paths
         "pretrained_model_name_or_path": str(base_model_path),
         "train_data_dir": str(dataset_dir),
+        # Il resto dell'app (Dataset Inspector, prepare_dataset) scrive/legge
+        # caption in file .txt; senza dirlo esplicitamente a sd-scripts, il
+        # suo default (.caption) fa ignorare TUTTE le caption in silenzio —
+        # il training procede solo col tag attivatore, senza errori visibili.
+        "caption_extension": ".txt",
         "output_dir": str(checkpoints_dir),
         "output_name": "lora",
         "save_model_as": "safetensors",
