@@ -72,7 +72,18 @@ def _format_submit_error(body: str) -> str:
     for node_id, info in node_errors.items():
         klass = info.get("class_type", "?") if isinstance(info, dict) else "?"
         for e in (info.get("errors", []) if isinstance(info, dict) else []):
-            parts.append(f"[nodo {node_id} {klass}] {e.get('message', '')}".strip())
+            piece = f"[nodo {node_id} {klass}] {e.get('message', '')}".strip()
+            # ComfyUI mette il campo/valore incriminato in "details" o
+            # "extra_info" (es. quale input di un COMBO e cosa si aspettava) —
+            # senza questo, "Value not in list" non dice MAI quale campo sia,
+            # costringendo a indovinare invece di leggere il log.
+            details = e.get("details")
+            if details:
+                piece += f": {details}"
+            extra = e.get("extra_info")
+            if extra:
+                piece += f" ({extra})"
+            parts.append(piece)
 
     return " · ".join(p for p in parts if p)
 
