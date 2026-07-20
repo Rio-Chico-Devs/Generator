@@ -412,6 +412,12 @@ def _parametrize(
     #     workflow senza questi ruoli mappati.
     _wire_depth_bypass(wf, user_params)
 
+    # 6d. IP-Adapter (rinforzo identità opzionale in "Posa da foto"): salta
+    #     l'intero ramo se non è stata data un'immagine 'character' — la LoRA
+    #     resta l'unica fonte di identità in quel caso (comportamento
+    #     storico). No-op sui workflow senza questi ruoli mappati.
+    _wire_ipadapter_bypass(wf, user_params)
+
     # 7. Knob numerici residui (steps, cfg, denoise…)
     #    Passati via set_role se presenti nel mapping; chiavi sconosciute ignorate.
     for key, value in user_params.items():
@@ -592,6 +598,34 @@ def _wire_depth_bypass(wf: WorkflowTemplate, user_params: dict[str, Any]) -> Non
     source = depth_out["node"] if depth_weight > 0.0 else pose_out["node"]
     wf.set_param(ks_pos["node"], ks_pos["field"], [source, 0])
     wf.set_param(ks_neg["node"], ks_neg["field"], [source, 1])
+
+
+def _wire_ipadapter_bypass(wf: WorkflowTemplate, user_params: dict[str, Any]) -> None:
+    """Salta l'intero ramo IP-Adapter (rinforzo identità da immagine) se non
+    è stata fornita un'immagine 'character': i consumatori del modello
+    (KSampler, FaceDetailer volto/mani) leggono direttamente dall'uscita
+    della LoRA invece che dall'uscita di IPAdapter.
+
+    Come per il bypass depth: il nodo IPAdapter non viene proprio eseguito
+    da ComfyUI quando bypassato (non reachable dall'output), quindi non
+    serve nemmeno che il custom node sia installato se non lo si usa. No-op
+    sui workflow senza questi ruoli mappati (es. base/refine/inpaint)."""
+    ks_model_in = wf.mapping.get("ksampler_model_in")
+    face_model_in = wf.mapping.get("face_detailer_model_in")
+    hand_model_in = wf.mapping.get("hand_detailer_model_in")
+    lora_out = wf.mapping.get("lora_model_out")
+    ipadapter_out = wf.mapping.get("ipadapter_model_out")
+    if not (ks_model_in and lora_out and ipadapter_out):
+        return
+
+    has_character_image = bool(user_params.get("character"))
+    source = ipadapter_out["node"] if has_character_image else lora_out["node"]
+
+    wf.set_param(ks_model_in["node"], ks_model_in["field"], [source, 0])
+    if face_model_in:
+        wf.set_param(face_model_in["node"], face_model_in["field"], [source, 0])
+    if hand_model_in:
+        wf.set_param(hand_model_in["node"], hand_model_in["field"], [source, 0])
 
 
 def _collect_lora_specs(

@@ -356,6 +356,7 @@ class GenerateView(QWidget):
         self._gpu_read_fn = None
         self._comfy_input_dir: Optional[Path] = None
         self._pose_photo_path: Optional[Path] = None
+        self._character_photo_path: Optional[Path] = None
         self._pending_per_image = 0.0
         self._seed_locked = False
         self._last_used_seed: Optional[int] = None
@@ -680,6 +681,44 @@ class GenerateView(QWidget):
         photo_row.addWidget(pose_browse)
         v.addLayout(photo_row)
 
+        char_hint = QLabel(
+            "Opzionale — rinforza l'identità con un'immagine di riferimento "
+            "del personaggio (IP-Adapter), utile se la LoRA da sola non è "
+            "abbastanza fedele. Lascia vuoto per usare solo la LoRA."
+        )
+        char_hint.setWordWrap(True)
+        char_hint.setStyleSheet("color: #8a8d96; font-size: 10px;")
+        v.addWidget(char_hint)
+
+        char_row = QHBoxLayout()
+        self.character_photo_label = QLabel("(nessuna immagine)")
+        self.character_photo_label.setStyleSheet("color: #8a8d96;")
+        char_row.addWidget(self.character_photo_label, 1)
+        char_browse = QPushButton("Scegli immagine…")
+        char_browse.clicked.connect(self._on_character_browse)
+        char_row.addWidget(char_browse)
+        char_clear = QPushButton("✕")
+        char_clear.setFixedWidth(28)
+        char_clear.setToolTip("Rimuovi l'immagine (torna a usare solo la LoRA)")
+        char_clear.clicked.connect(self._on_character_clear)
+        char_row.addWidget(char_clear)
+        v.addLayout(char_row)
+
+        iw_row = QHBoxLayout()
+        iw_row.addWidget(QLabel("Rinforzo identità:"))
+        self.ip_adapter_weight_slider = QSlider(Qt.Orientation.Horizontal)
+        self.ip_adapter_weight_slider.setMinimum(0)
+        self.ip_adapter_weight_slider.setMaximum(100)
+        self.ip_adapter_weight_slider.setValue(60)
+        self.ip_adapter_weight_slider.valueChanged.connect(
+            lambda v_: self.ip_adapter_weight_label.setText(f"{v_ / 100:.2f}")
+        )
+        iw_row.addWidget(self.ip_adapter_weight_slider, 1)
+        self.ip_adapter_weight_label = QLabel("0.60")
+        self.ip_adapter_weight_label.setFixedWidth(34)
+        iw_row.addWidget(self.ip_adapter_weight_label)
+        v.addLayout(iw_row)
+
         pw_row = QHBoxLayout()
         pw_row.addWidget(QLabel("Fedeltà posa:"))
         self.pose_weight_slider = QSlider(Qt.Orientation.Horizontal)
@@ -742,6 +781,22 @@ class GenerateView(QWidget):
         self.pose_photo_label.setText(self._pose_photo_path.name)
         self.pose_photo_label.setStyleSheet("color: #cdd0d8;")
 
+    def _on_character_browse(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Scegli immagine di riferimento del personaggio", "",
+            "Immagini (*.png *.jpg *.jpeg *.webp)",
+        )
+        if not path:
+            return
+        self._character_photo_path = Path(path)
+        self.character_photo_label.setText(self._character_photo_path.name)
+        self.character_photo_label.setStyleSheet("color: #cdd0d8;")
+
+    def _on_character_clear(self) -> None:
+        self._character_photo_path = None
+        self.character_photo_label.setText("(nessuna immagine)")
+        self.character_photo_label.setStyleSheet("color: #8a8d96;")
+
     def _on_pose_generate(self) -> None:
         if self._project is None or self._client is None or self._wallet is None:
             return
@@ -785,6 +840,9 @@ class GenerateView(QWidget):
             "autofix_face": "yes" if self.autofix_face_check.isChecked() else "no",
             "autofix_hands": "yes" if self.autofix_hands_check.isChecked() else "no",
         }
+        if self._character_photo_path is not None:
+            user_params["character"] = str(self._character_photo_path)
+            user_params["ip_adapter_weight"] = self.ip_adapter_weight_slider.value() / 100.0
         per_image = self._collect_form().estimate().per_image
         if not self._wallet.can_afford(per_image):
             QMessageBox.warning(

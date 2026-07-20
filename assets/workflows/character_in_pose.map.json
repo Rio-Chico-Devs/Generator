@@ -3,10 +3,11 @@
     "recipe": "character_in_pose",
     "phase": 1,
     "requires_custom_nodes": [
-      "comfyui_controlnet_aux (nodi DWPreprocessor + MiDaS-DepthMapPreprocessor + onnx yolox_l / dw-ll_ucoco_384)"
+      "comfyui_controlnet_aux (nodi DWPreprocessor + MiDaS-DepthMapPreprocessor + onnx yolox_l / dw-ll_ucoco_384)",
+      "ComfyUI_IPAdapter_plus (nodi IPAdapterUnifiedLoader + IPAdapter, per il rinforzo identità opzionale — non FaceID)"
     ],
     "validate_on_real_comfy": true,
-    "note": "Pipeline: posa (DWPose->ControlNet OpenPose, forza moderata) + profondità opzionale (MiDaS->ControlNet Depth, rinforzo leggero, bypassabile se depth_weight<=0 — MiDaS-DepthMapPreprocessor richiede torch>=2.6 per una restrizione di sicurezza su torch.load, CVE-2025-32434) + identità/stile del personaggio via LoRA (già in uso nel progetto). Niente IPAdapter FaceID: l'identità del personaggio è quella imparata dalla sua LoRA, non una foto di volto — così il modificatore di posa si applica a QUALSIASI personaggio con LoRA attiva. I class_type dei nodi custom vanno verificati contro le versioni installate: cambiano tra fork. 'pose' è la foto di riferimento (verrà estratto scheletro + mappa di profondità dalla stessa immagine)."
+    "note": "Pipeline: posa (DWPose->ControlNet OpenPose, forza moderata) + profondità opzionale (MiDaS->ControlNet Depth, rinforzo leggero, bypassabile se depth_weight<=0 — MiDaS-DepthMapPreprocessor richiede torch>=2.6 per una restrizione di sicurezza su torch.load, CVE-2025-32434) + identità/stile del personaggio via LoRA (già in uso nel progetto) + rinforzo identità opzionale via IP-Adapter Plus (bypassabile se non viene fornita un'immagine 'character' — utile quando la LoRA da sola non è abbastanza flessibile, es. dataset piccolo/poche pose in training). Niente IPAdapter FaceID: quello è per foto di volti reali, qui l'immagine di riferimento è un disegno/screenshot del personaggio stesso. I class_type dei nodi custom vanno verificati contro le versioni installate: cambiano tra fork. 'pose' è la foto di riferimento della posa (verrà estratto scheletro + mappa di profondità dalla stessa immagine); 'character' è un'immagine separata e opzionale del personaggio per il rinforzo IP-Adapter."
   },
   "checkpoint": { "node": "4", "field": "ckpt_name" },
   "positive_prompt": { "node": "6", "field": "text" },
@@ -29,6 +30,13 @@
   "ksampler_negative_in": { "node": "3", "field": "negative" },
   "pose_conditioning_out": { "node": "24" },
   "depth_conditioning_out": { "node": "27" },
+  "character": { "node": "40" },
+  "ip_adapter_weight": { "node": "42", "field": "weight" },
+  "ksampler_model_in": { "node": "3", "field": "model" },
+  "face_detailer_model_in": { "node": "32", "field": "model" },
+  "hand_detailer_model_in": { "node": "33", "field": "model" },
+  "lora_model_out": { "node": "10" },
+  "ipadapter_model_out": { "node": "42" },
   "lora": {
     "node": "10",
     "name_field": "lora_name",

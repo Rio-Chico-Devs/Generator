@@ -99,6 +99,33 @@
       "end_percent": 1.0
     }
   },
+  "40": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "character.png"
+    }
+  },
+  "41": {
+    "class_type": "IPAdapterUnifiedLoader",
+    "inputs": {
+      "model": ["10", 0],
+      "preset": "PLUS (high strength)"
+    }
+  },
+  "42": {
+    "class_type": "IPAdapter",
+    "inputs": {
+      "model": ["41", 0],
+      "ipadapter": ["41", 1],
+      "image": ["40", 0],
+      "weight": 0.6,
+      "weight_type": "linear",
+      "combine_embeds": "concat",
+      "start_at": 0.0,
+      "end_at": 1.0,
+      "embeds_scaling": "V only"
+    }
+  },
   "5": {
     "class_type": "EmptyLatentImage",
     "inputs": {

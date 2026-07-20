@@ -90,11 +90,18 @@ RECIPES: dict[RecipeId, RecipeDef] = {
             "pony-v6-xl",
             "controlnet-openpose-sdxl",
             "controlnet-depth-sdxl",
+            "ipadapter-plus-sdxl",
+            "clip-vision-vit-h",
         ],
         priority_phase=1,
         inputs=[
             RecipeInput("pose", "Foto di riferimento", "pose",
                         help="Una foto o disegno nella posa che vuoi replicare"),
+            RecipeInput("character", "Immagine personaggio (opzionale)", "character",
+                        required=False,
+                        help="Rinforza l'identità con un'immagine di riferimento del "
+                             "personaggio (via IP-Adapter), utile quando la LoRA da "
+                             "sola non basta. Lascia vuoto per usare solo la LoRA."),
             RecipeInput("prompt", "Descrizione", "text"),
             RecipeInput("negative", "Da evitare", "text", required=False,
                         default="low quality, worst quality, bad hands, deformed"),
@@ -106,6 +113,10 @@ RECIPES: dict[RecipeId, RecipeDef] = {
                         help="Rinforza le proporzioni/profondità senza irrigidire la posa. "
                              "0 = disattivo (default): il preprocessore MiDaS richiede "
                              "torch>=2.6, non ancora supportato su questo setup."),
+            RecipeInput("ip_adapter_weight", "Rinforzo identità (immagine)", "number",
+                        default=0.6, advanced=True,
+                        help="Quanto pesa l'immagine di riferimento del personaggio "
+                             "(solo se fornita) rispetto alla LoRA/prompt."),
             RecipeInput("lora_weight", "Forza stile", "number", default=0.85,
                         advanced=True),
             RecipeInput("autofix_hands", "Correggi mani", "choice",

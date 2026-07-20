@@ -315,14 +315,58 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
         license="Apache-2.0",
         license_url="https://huggingface.co/h94/IP-Adapter-FaceID/blob/main/LICENSE",
         description=(
-            "Mantiene l'identità visiva di un volto reale (foto) attraverso i "
-            "frame generati. Non usato da nessuna ricetta attiva: 'Posa da "
-            "foto' usa la LoRA del personaggio per l'identità, non foto di "
-            "volto. Tenuto in catalogo per un futuro caso d'uso 'da foto vera "
-            "a personaggio'."
+            "Mantiene l'identità di un VOLTO REALE (foto) usando un embedding "
+            "di riconoscimento facciale (insightface) — pensato per foto di "
+            "persone, non per personaggi disegnati. Non usato da nessuna "
+            "ricetta attiva. Tenuto in catalogo per un futuro caso d'uso 'da "
+            "foto vera a personaggio'."
         ),
         min_vram_gb=1.0,
         required_for_phase=7,
+        commercial_use_ok=True,
+    ),
+
+    "ipadapter-plus-sdxl": AuxModelEntry(
+        id="ipadapter-plus-sdxl",
+        name="IP-Adapter Plus SDXL",
+        kind="ipadapter",
+        repo_id="h94/IP-Adapter",
+        filename="ip-adapter-plus_sdxl_vit-h.safetensors",
+        comfy_subdir="ipadapter",
+        size_gb=0.85,
+        license="Apache-2.0",
+        license_url="https://huggingface.co/h94/IP-Adapter/blob/main/LICENSE",
+        description=(
+            "Cattura l'aspetto visivo di un'immagine di riferimento QUALSIASI "
+            "(disegno, screenshot, non serve un volto reale) tramite CLIP "
+            "vision, senza bisogno di riconoscimento facciale. Usato in 'Posa "
+            "da foto' come rinforzo dell'identità accanto alla LoRA del "
+            "personaggio — utile quando la LoRA da sola non basta (dataset "
+            "piccolo/poche pose viste in training)."
+        ),
+        min_vram_gb=1.0,
+        required_for_phase=1,
+        commercial_use_ok=True,
+    ),
+
+    "clip-vision-vit-h": AuxModelEntry(
+        id="clip-vision-vit-h",
+        name="CLIP Vision ViT-H (per IP-Adapter Plus)",
+        kind="clip_vision",
+        repo_id="h94/IP-Adapter",
+        filename="models/image_encoder/model.safetensors",
+        comfy_subdir="clip_vision",
+        size_gb=2.5,
+        license="Apache-2.0",
+        license_url="https://huggingface.co/h94/IP-Adapter/blob/main/LICENSE",
+        description=(
+            "Encoder visivo richiesto da IP-Adapter Plus per 'leggere' "
+            "l'immagine di riferimento. Va rinominato in un nome riconoscibile "
+            "(es. CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors) quando salvato "
+            "in models/clip_vision/."
+        ),
+        min_vram_gb=1.5,
+        required_for_phase=1,
         commercial_use_ok=True,
     ),
 
