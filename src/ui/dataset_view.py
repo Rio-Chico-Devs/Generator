@@ -25,12 +25,16 @@ Clicca un tag nella tabella per filtrare le thumbnail a quelle che lo contengono
 from __future__ import annotations
 
 import logging
+import shutil
+import uuid
+from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPixmap
 from PyQt6.QtWidgets import (
     QButtonGroup,
+    QFileDialog,
     QFrame,
     QGridLayout,
     QGroupBox,
@@ -52,6 +56,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.core.dataset_inspector import (
+    IMAGE_EXTS,
     DatasetItem,
     dataset_stats,
     remove_dataset_item,
@@ -511,6 +516,15 @@ class DatasetView(QWidget):
         v.setContentsMargins(4, 4, 4, 4)
         v.setSpacing(6)
 
+        # Aggiungi immagini: copia i file scelti direttamente nella cartella
+        # giusta del progetto, senza dover andare a cercarla in Explorer.
+        add_row = QHBoxLayout()
+        add_btn = QPushButton("➕  Aggiungi immagini…")
+        add_btn.clicked.connect(lambda _checked=False, m=mode: self._on_add_images(m))
+        add_row.addWidget(add_btn)
+        add_row.addStretch()
+        v.addLayout(add_row)
+
         # Pannello stats + tabella tag
         stats = _StatsPanel()
         v.addWidget(stats)
@@ -566,6 +580,47 @@ class DatasetView(QWidget):
         pane["stats"].load(items)
         pane["grid"].load(items)
         pane["detail"].load(None)
+
+    def _on_add_images(self, mode: str) -> None:
+        """Copia le immagini scelte dall'utente nella cartella dataset/negativi
+        del progetto, poi ricarica il pannello per mostrarle subito."""
+        if self._project is None:
+            return
+        ext_filter = " ".join(f"*{e}" for e in sorted(IMAGE_EXTS))
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Scegli immagini da aggiungere", "",
+            f"Immagini ({ext_filter})",
+        )
+        if not paths:
+            return
+
+        directory = (
+            self._project.dataset_images_dir if mode == "dataset"
+            else self._project.negatives_dir
+        )
+        directory.mkdir(parents=True, exist_ok=True)
+
+        added = 0
+        errors: list[str] = []
+        for raw in paths:
+            src = Path(raw)
+            dest = directory / src.name
+            if dest.exists():
+                # Nome già presente: aggiunge un suffisso invece di sovrascrivere
+                # una caption/immagine esistente per errore.
+                dest = directory / f"{src.stem}_{uuid.uuid4().hex[:6]}{src.suffix}"
+            try:
+                shutil.copy2(src, dest)
+                added += 1
+            except OSError as exc:
+                errors.append(f"{src.name}: {exc}")
+
+        self._reload_pane(mode)
+
+        msg = f"{added} immagine/i aggiunta/e." if added else "Nessuna immagine aggiunta."
+        if errors:
+            msg += "\n\nAlcuni file non sono stati copiati:\n" + "\n".join(errors)
+        QMessageBox.information(self, "Aggiunta al dataset", msg)
 
     def _on_tab_changed(self, index: int) -> None:
         # Ricarica il pannello appena visualizzato per riflettere modifiche recenti
