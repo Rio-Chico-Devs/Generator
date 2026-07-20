@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -39,6 +40,7 @@ from src.training.run_status import (
     RunStatus,
 )
 from src.utils.atomic import atomic_write_text
+from src.utils.paths import get_models_dir
 
 logger = logging.getLogger(__name__)
 
@@ -329,15 +331,35 @@ class TrainingWorker(QThread):
             status.save(run_dir)
             return
 
+        # Copia il checkpoint nella cartella LoRA che ComfyUI vede davvero
+        # (models/loras/). Il training scrive in training/runs/.../checkpoints/,
+        # una cartella del progetto che ComfyUI non conosce: usarla direttamente
+        # farebbe fallire LoraLoader con "Value not in list" (il file esiste,
+        # ma non in un percorso che ComfyUI enumera). Nome legato al tag
+        # attivatore per restare unico tra progetti diversi.
+        visible_name = f"{self._project.activator_tag}.safetensors"
+        visible_path = get_models_dir() / "loras" / visible_name
+        try:
+            visible_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(final, visible_path)
+        except OSError as exc:
+            msg = f"LoRA addestrata ma copia in models/loras/ fallita: {exc}"
+            self.error.emit(msg)
+            status.status = STATUS_ERROR
+            status.error_message = msg
+            status.save(run_dir)
+            return
+
         status.status = STATUS_DONE
         status.final_checkpoint_path = str(final)
         status.finished_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         status.save(run_dir)
 
-        # Aggiorna project.active_lora
+        # Aggiorna project.active_lora: punta alla copia visibile a ComfyUI,
+        # non al file originale nella cartella di training.
         self._project.active_lora = ActiveLora(
             run_id=run_id,
-            checkpoint=str(final),
+            checkpoint=str(visible_path),
             weight=0.85,
         )
         self._project.stats.training_runs += 1
