@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ from typing import Optional
 
 from PyQt6.QtCore import QThread, pyqtSignal
 
+from src.core.catalog import CATALOG
 from src.core.project import ActiveLora, Project
 from src.training.config import TrainingParams, generate_toml, sdscripts_launch_cmd
 from src.training.dataset_prep import DatasetReport, prepare_dataset
@@ -38,6 +40,7 @@ from src.training.run_status import (
     RunStatus,
 )
 from src.utils.atomic import atomic_write_text
+from src.utils.paths import get_models_dir
 
 logger = logging.getLogger(__name__)
 
@@ -106,10 +109,7 @@ class TrainingWorker(QThread):
         self._aborted = True
         proc = self._process
         if proc and proc.poll() is None:
-            try:
-                proc.terminate()
-            except OSError:
-                pass
+            _terminate_process_tree(proc)
 
     # --- Thread entry point -----------------------------------------------
 
@@ -126,10 +126,7 @@ class TrainingWorker(QThread):
             logger.exception("TrainingWorker: errore non gestito")
             proc = self._process
             if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                except OSError:
-                    pass
+                _terminate_process_tree(proc)
             self.error.emit(f"Errore interno del training: {exc}")
 
     def _run_impl(self) -> None:
@@ -145,6 +142,14 @@ class TrainingWorker(QThread):
         )
         self._run_status = status
         status.save(run_dir)
+
+        mismatch = _family_mismatch_message(self._project, preset)
+        if mismatch:
+            self.error.emit(mismatch)
+            status.status = STATUS_ERROR
+            status.error_message = mismatch
+            status.save(run_dir)
+            return
 
         # 1. Prepara dataset
         status.status = STATUS_PREPARING
@@ -243,7 +248,17 @@ class TrainingWorker(QThread):
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                    env={
+                        **os.environ,
+                        "PYTHONUNBUFFERED": "1",
+                        # Senza questi, Python su Windows codifica lo stdout del
+                        # child con la codepage di sistema (es. cp1252) quando
+                        # è pipato: qualsiasi carattere accentato (nomi
+                        # progetto, tag, percorsi in italiano) causa un
+                        # UnicodeEncodeError che abortisce l'intero training.
+                        "PYTHONIOENCODING": "utf-8",
+                        "PYTHONUTF8": "1",
+                    },
                 )
                 assert self._process.stdout is not None
 
@@ -267,7 +282,7 @@ class TrainingWorker(QThread):
                     self.log_line.emit(line)
 
                     if self._aborted:
-                        self._process.terminate()
+                        _terminate_process_tree(self._process)
                         break
 
                     self._parse_line(line, status, run_dir, loss_window)
@@ -281,10 +296,7 @@ class TrainingWorker(QThread):
             # Mai lasciare orfano il subprocess se il monitor fallisce.
             proc = self._process
             if proc is not None and proc.poll() is None:
-                try:
-                    proc.terminate()
-                except OSError:
-                    pass
+                _terminate_process_tree(proc)
             self.error.emit(msg)
             status.status = STATUS_ERROR
             status.error_message = msg
@@ -295,6 +307,9 @@ class TrainingWorker(QThread):
 
         if self._aborted:
             status.status = STATUS_ABORTED
+            state_dir = _find_latest_state_dir(run_dir)
+            if state_dir is not None:
+                status.last_state_dir = str(state_dir)
             status.save(run_dir)
             return
 
@@ -316,15 +331,35 @@ class TrainingWorker(QThread):
             status.save(run_dir)
             return
 
+        # Copia il checkpoint nella cartella LoRA che ComfyUI vede davvero
+        # (models/loras/). Il training scrive in training/runs/.../checkpoints/,
+        # una cartella del progetto che ComfyUI non conosce: usarla direttamente
+        # farebbe fallire LoraLoader con "Value not in list" (il file esiste,
+        # ma non in un percorso che ComfyUI enumera). Nome legato al tag
+        # attivatore per restare unico tra progetti diversi.
+        visible_name = f"{self._project.activator_tag}.safetensors"
+        visible_path = get_models_dir() / "loras" / visible_name
+        try:
+            visible_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(final, visible_path)
+        except OSError as exc:
+            msg = f"LoRA addestrata ma copia in models/loras/ fallita: {exc}"
+            self.error.emit(msg)
+            status.status = STATUS_ERROR
+            status.error_message = msg
+            status.save(run_dir)
+            return
+
         status.status = STATUS_DONE
         status.final_checkpoint_path = str(final)
         status.finished_at = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
         status.save(run_dir)
 
-        # Aggiorna project.active_lora
+        # Aggiorna project.active_lora: punta alla copia visibile a ComfyUI,
+        # non al file originale nella cartella di training.
         self._project.active_lora = ActiveLora(
             run_id=run_id,
-            checkpoint=str(final),
+            checkpoint=str(visible_path),
             weight=0.85,
         )
         self._project.stats.training_runs += 1
@@ -406,11 +441,85 @@ class TrainingWorker(QThread):
                 ckpt_path = run_dir / "checkpoints" / ckpt_path.name
             if ckpt_path.exists():
                 status.last_checkpoint_path = str(ckpt_path)
+                state_dir = _find_latest_state_dir(run_dir)
+                if state_dir is not None:
+                    status.last_state_dir = str(state_dir)
                 _safe_save(status, run_dir)
                 self.checkpoint_saved.emit(ckpt_path, status.current_epoch)
 
 
 # --- Helpers ----------------------------------------------------------
+
+
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    """Termina il processo e TUTTI i suoi figli.
+
+    ``accelerate launch`` avvia lo script di training vero come processo
+    figlio: terminare solo il padre (``proc.terminate()``) lascia quel figlio
+    — quello che tiene occupato il contesto CUDA/la VRAM — orfano e in
+    esecuzione, causando un OOM apparentemente senza causa al tentativo
+    successivo. Richiede psutil (già usato altrove nel progetto)."""
+    try:
+        import psutil
+
+        parent = psutil.Process(proc.pid)
+        children = parent.children(recursive=True)
+        for child in children:
+            try:
+                child.terminate()
+            except psutil.NoSuchProcess:
+                pass
+        _gone, alive = psutil.wait_procs(children, timeout=5)
+        for p in alive:
+            try:
+                p.kill()
+            except psutil.NoSuchProcess:
+                pass
+    except Exception as exc:
+        logger.warning("Terminazione albero processi fallita: %s", exc)
+    try:
+        proc.terminate()
+    except OSError:
+        pass
+
+
+def _family_mismatch_message(project: Project, preset: TrainingPreset) -> Optional[str]:
+    """Controllo pre-flight: la famiglia del modello base del progetto
+    combacia con quella richiesta dal preset scelto?
+
+    Senza questo controllo, un progetto SD1.5 con preset SDXL (o viceversa)
+    fallisce dentro sd-scripts con un opaco errore di state-dict mismatch
+    invece che con un messaggio chiaro PRIMA di lanciare il subprocess."""
+    if project.base_model is None:
+        return None
+    entry = CATALOG.get(project.base_model.id)
+    if entry is None or not getattr(entry, "family", None):
+        return None  # modello non in catalogo: non possiamo verificare
+    if entry.family != preset.model_family:
+        return (
+            f"Il modello base del progetto ('{entry.name}', famiglia "
+            f"'{entry.family}') non è compatibile con il preset scelto "
+            f"(richiede '{preset.model_family}'). Scegli un preset per "
+            f"'{entry.family}' o cambia il modello base del progetto."
+        )
+    return None
+
+
+def _find_latest_state_dir(run_dir: Path) -> Optional[Path]:
+    """Cerca la cartella di stato più recente salvata da sd-scripts
+    (``save_state``: ottimizzatore/scheduler/RNG, nome tipo
+    ``lora-000004-state``), per --resume.
+
+    Cerca su disco invece di fare regex sullo stdout: il testo esatto del
+    messaggio di log cambia tra versioni di sd-scripts, la cartella con
+    suffisso ``-state`` no."""
+    ckpt_dir = run_dir / "checkpoints"
+    if not ckpt_dir.exists():
+        return None
+    candidates = [d for d in ckpt_dir.glob("*-state") if d.is_dir()]
+    if not candidates:
+        return None
+    return max(candidates, key=lambda d: d.stat().st_mtime)
 
 
 def _safe_save(status: RunStatus, run_dir: Path) -> None:

@@ -53,7 +53,9 @@ class TrainingPreset:
 
     # --- Precision / memory ---
     mixed_precision: str = "bf16"
-    xformers: bool = True
+    # Attention efficiente: SDPA (in config.py, sempre attiva), non xformers
+    # — evita la dipendenza fragile da agganciare alla versione di torch su
+    # Windows. Nessun campo qui: non è un parametro configurabile per preset.
     gradient_checkpointing: bool = True
     cache_latents: bool = True
     cache_latents_to_disk: bool = False
@@ -95,7 +97,6 @@ PRESETS: dict[PresetId, TrainingPreset] = {
         lr_warmup_steps=50,
         optimizer_type="AdamW8bit",
         mixed_precision="fp16",  # fp16 su SD1.5 (bf16 non necessario)
-        xformers=True,
         gradient_checkpointing=True,
         cache_latents=True,
         cache_latents_to_disk=False,
@@ -129,7 +130,6 @@ PRESETS: dict[PresetId, TrainingPreset] = {
         lr_warmup_steps=100,
         optimizer_type="AdamW8bit",
         mixed_precision="bf16",  # bf16 > fp16 su SDXL per stabilità numerica
-        xformers=True,
         gradient_checkpointing=True,
         cache_latents=True,
         cache_latents_to_disk=True,
@@ -166,7 +166,6 @@ PRESETS: dict[PresetId, TrainingPreset] = {
         lr_warmup_steps=150,
         optimizer_type="AdamW8bit",
         mixed_precision="bf16",
-        xformers=True,
         gradient_checkpointing=True,
         cache_latents=True,
         cache_latents_to_disk=True,

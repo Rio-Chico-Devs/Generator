@@ -283,6 +283,27 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
         commercial_use_ok=True,
     ),
 
+    "controlnet-depth-sdxl": AuxModelEntry(
+        id="controlnet-depth-sdxl",
+        name="ControlNet Depth SDXL",
+        kind="controlnet",
+        repo_id="diffusers/controlnet-depth-sdxl-1.0",
+        filename="diffusion_pytorch_model.fp16.safetensors",
+        comfy_subdir="controlnet",
+        size_gb=2.5,
+        license="OpenRAIL",
+        license_url="https://huggingface.co/diffusers/controlnet-depth-sdxl-1.0/blob/main/LICENSE.md",
+        description=(
+            "Rinforza le proporzioni/profondità a fianco della posa (OpenPose), "
+            "usato a peso basso per correggere l'anatomia senza irrigidire la "
+            "posa. Input: mappa di profondità estratta da MiDaS. Usato in "
+            "Ricetta 'Posa da foto'."
+        ),
+        min_vram_gb=2.5,
+        required_for_phase=1,
+        commercial_use_ok=True,
+    ),
+
     "ipadapter-faceid-plus-v2": AuxModelEntry(
         id="ipadapter-faceid-plus-v2",
         name="IP-Adapter FaceID Plus v2 SDXL",
@@ -294,12 +315,58 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
         license="Apache-2.0",
         license_url="https://huggingface.co/h94/IP-Adapter-FaceID/blob/main/LICENSE",
         description=(
-            "Mantiene l'identità visiva del personaggio (volto + caratteristiche) "
-            "attraverso i frame generati. Input: 1-3 immagini reference del personaggio. "
-            "Usato in Ricetta A."
+            "Mantiene l'identità di un VOLTO REALE (foto) usando un embedding "
+            "di riconoscimento facciale (insightface) — pensato per foto di "
+            "persone, non per personaggi disegnati. Non usato da nessuna "
+            "ricetta attiva. Tenuto in catalogo per un futuro caso d'uso 'da "
+            "foto vera a personaggio'."
         ),
         min_vram_gb=1.0,
-        required_for_phase=3,
+        required_for_phase=7,
+        commercial_use_ok=True,
+    ),
+
+    "ipadapter-plus-sdxl": AuxModelEntry(
+        id="ipadapter-plus-sdxl",
+        name="IP-Adapter Plus SDXL",
+        kind="ipadapter",
+        repo_id="h94/IP-Adapter",
+        filename="ip-adapter-plus_sdxl_vit-h.safetensors",
+        comfy_subdir="ipadapter",
+        size_gb=0.85,
+        license="Apache-2.0",
+        license_url="https://huggingface.co/h94/IP-Adapter/blob/main/LICENSE",
+        description=(
+            "Cattura l'aspetto visivo di un'immagine di riferimento QUALSIASI "
+            "(disegno, screenshot, non serve un volto reale) tramite CLIP "
+            "vision, senza bisogno di riconoscimento facciale. Usato in 'Posa "
+            "da foto' come rinforzo dell'identità accanto alla LoRA del "
+            "personaggio — utile quando la LoRA da sola non basta (dataset "
+            "piccolo/poche pose viste in training)."
+        ),
+        min_vram_gb=1.0,
+        required_for_phase=1,
+        commercial_use_ok=True,
+    ),
+
+    "clip-vision-vit-h": AuxModelEntry(
+        id="clip-vision-vit-h",
+        name="CLIP Vision ViT-H (per IP-Adapter Plus)",
+        kind="clip_vision",
+        repo_id="h94/IP-Adapter",
+        filename="models/image_encoder/model.safetensors",
+        comfy_subdir="clip_vision",
+        size_gb=2.5,
+        license="Apache-2.0",
+        license_url="https://huggingface.co/h94/IP-Adapter/blob/main/LICENSE",
+        description=(
+            "Encoder visivo richiesto da IP-Adapter Plus per 'leggere' "
+            "l'immagine di riferimento. Va rinominato in un nome riconoscibile "
+            "(es. CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors) quando salvato "
+            "in models/clip_vision/."
+        ),
+        min_vram_gb=1.5,
+        required_for_phase=1,
         commercial_use_ok=True,
     ),
 
@@ -321,6 +388,49 @@ AUX_CATALOG: dict[str, AuxModelEntry] = {
         ),
         min_vram_gb=0.2,
         required_for_phase=1,  # serve per Pose Library (estrazione scheletro)
+        commercial_use_ok=True,
+    ),
+
+    # --- ADetailer: correzione automatica volto/mani (usata da BASE e "Posa da foto") ---
+
+    "adetailer-face-yolov8m": AuxModelEntry(
+        id="adetailer-face-yolov8m",
+        name="ADetailer face_yolov8m",
+        kind="detector",
+        repo_id="Bingsu/adetailer",
+        filename="face_yolov8m.pt",
+        comfy_subdir="ultralytics/bbox",
+        size_gb=0.05,
+        license="AGPL-3.0",
+        license_url="https://huggingface.co/Bingsu/adetailer/blob/main/LICENSE",
+        description=(
+            "Rileva i volti nell'immagine generata per il ridisegno locale "
+            "(FaceDetailer di ComfyUI-Impact-Pack). Gestito dal nodo "
+            "UltralyticsDetectorProvider; richiede il custom node "
+            "ComfyUI-Impact-Pack installato."
+        ),
+        min_vram_gb=0.3,
+        required_for_phase=1,
+        commercial_use_ok=True,
+    ),
+
+    "adetailer-hand-yolov8s": AuxModelEntry(
+        id="adetailer-hand-yolov8s",
+        name="ADetailer hand_yolov8s",
+        kind="detector",
+        repo_id="Bingsu/adetailer",
+        filename="hand_yolov8s.pt",
+        comfy_subdir="ultralytics/bbox",
+        size_gb=0.02,
+        license="AGPL-3.0",
+        license_url="https://huggingface.co/Bingsu/adetailer/blob/main/LICENSE",
+        description=(
+            "Rileva le mani nell'immagine generata per il ridisegno locale "
+            "(FaceDetailer di ComfyUI-Impact-Pack, riusato con detector mani). "
+            "Richiede il custom node ComfyUI-Impact-Pack installato."
+        ),
+        min_vram_gb=0.3,
+        required_for_phase=1,
         commercial_use_ok=True,
     ),
 

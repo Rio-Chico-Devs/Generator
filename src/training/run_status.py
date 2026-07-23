@@ -55,6 +55,7 @@ class RunStatus:
     # Paths
     config_path: Optional[str] = None
     last_checkpoint_path: Optional[str] = None
+    last_state_dir: Optional[str] = None  # per --resume (sd-scripts save_state)
     final_checkpoint_path: Optional[str] = None
 
     # Loss history (sampled, non tutti gli step)
@@ -65,8 +66,12 @@ class RunStatus:
 
     @property
     def is_resumable(self) -> bool:
-        """True se il run è interrotto e ha un checkpoint da cui riprendere."""
-        return self.status == STATUS_ABORTED and self.last_checkpoint_path is not None
+        """True se il run è interrotto e ha uno stato salvato da cui riprendere.
+
+        Serve la cartella di stato (ottimizzatore/scheduler/RNG, prodotta da
+        ``save_state``), non il solo file .safetensors dei pesi: sd-scripts
+        rifiuta o interpreta male ``--resume`` puntato a un file pesi."""
+        return self.status == STATUS_ABORTED and self.last_state_dir is not None
 
     @property
     def progress_pct(self) -> float:
@@ -87,6 +92,7 @@ class RunStatus:
             "max_epochs": self.max_epochs,
             "config_path": self.config_path,
             "last_checkpoint_path": self.last_checkpoint_path,
+            "last_state_dir": self.last_state_dir,
             "final_checkpoint_path": self.final_checkpoint_path,
             "loss_history": [lp.to_dict() for lp in self.loss_history],
             "error_message": self.error_message,
@@ -106,6 +112,7 @@ class RunStatus:
             max_epochs=int(d.get("max_epochs", 0)),
             config_path=d.get("config_path"),
             last_checkpoint_path=d.get("last_checkpoint_path"),
+            last_state_dir=d.get("last_state_dir"),
             final_checkpoint_path=d.get("final_checkpoint_path"),
             loss_history=[LossPoint.from_dict(lp) for lp in d.get("loss_history", [])],
             error_message=d.get("error_message"),

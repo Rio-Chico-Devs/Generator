@@ -355,6 +355,8 @@ class GenerateView(QWidget):
         self._safety = None
         self._gpu_read_fn = None
         self._comfy_input_dir: Optional[Path] = None
+        self._pose_photo_path: Optional[Path] = None
+        self._character_photo_path: Optional[Path] = None
         self._pending_per_image = 0.0
         self._seed_locked = False
         self._last_used_seed: Optional[int] = None
@@ -375,6 +377,7 @@ class GenerateView(QWidget):
         col.addWidget(self._build_prompt_group())
         col.addWidget(self._build_model_group())
         col.addWidget(self._build_settings_group())
+        col.addWidget(self._build_pose_group())
         col.addWidget(self._build_upscaler_group())
         col.addWidget(self._build_credit_group())
         col.addStretch()
@@ -632,6 +635,22 @@ class GenerateView(QWidget):
         cfg_row.addWidget(self.cfg_spin, 1)
         adv.addLayout(cfg_row)
 
+        self.autofix_face_check = QCheckBox("Correggi volto (ADetailer)")
+        self.autofix_face_check.setChecked(True)
+        self.autofix_face_check.setToolTip(
+            "Ridisegna il volto in dettaglio con un secondo passaggio locale.\n"
+            "Richiede il custom node ComfyUI-Impact-Pack installato."
+        )
+        adv.addWidget(self.autofix_face_check)
+
+        self.autofix_hands_check = QCheckBox("Correggi mani (ADetailer)")
+        self.autofix_hands_check.setChecked(True)
+        self.autofix_hands_check.setToolTip(
+            "Ridisegna le mani in dettaglio con un secondo passaggio locale.\n"
+            "Richiede il custom node ComfyUI-Impact-Pack installato."
+        )
+        adv.addWidget(self.autofix_hands_check)
+
         self._adv_widget.setVisible(False)
         v.addWidget(self._adv_widget)
         return box
@@ -639,6 +658,207 @@ class GenerateView(QWidget):
     def _on_adv_toggled(self, visible: bool) -> None:
         self._adv_widget.setVisible(visible)
         self.adv_toggle.setText("⚙  Avanzate ▾" if visible else "⚙  Avanzate ▸")
+
+    def _build_pose_group(self) -> QGroupBox:
+        box = QGroupBox("Posa da foto")
+        v = QVBoxLayout(box)
+
+        hint = QLabel(
+            "Carica una foto o un disegno in una posa: il personaggio "
+            "(LoRA attiva sopra) viene ridisegnato nella stessa posa, "
+            "nel tuo stile — identità e accessori restano i suoi."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #8a8d96; font-size: 10px;")
+        v.addWidget(hint)
+
+        photo_row = QHBoxLayout()
+        self.pose_photo_label = QLabel("(nessuna foto)")
+        self.pose_photo_label.setStyleSheet("color: #8a8d96;")
+        photo_row.addWidget(self.pose_photo_label, 1)
+        pose_browse = QPushButton("Scegli foto…")
+        pose_browse.clicked.connect(self._on_pose_browse)
+        photo_row.addWidget(pose_browse)
+        v.addLayout(photo_row)
+
+        char_hint = QLabel(
+            "Opzionale — rinforza l'identità con un'immagine di riferimento "
+            "del personaggio (IP-Adapter), utile se la LoRA da sola non è "
+            "abbastanza fedele. Lascia vuoto per usare solo la LoRA."
+        )
+        char_hint.setWordWrap(True)
+        char_hint.setStyleSheet("color: #8a8d96; font-size: 10px;")
+        v.addWidget(char_hint)
+
+        char_row = QHBoxLayout()
+        self.character_photo_label = QLabel("(nessuna immagine)")
+        self.character_photo_label.setStyleSheet("color: #8a8d96;")
+        char_row.addWidget(self.character_photo_label, 1)
+        char_browse = QPushButton("Scegli immagine…")
+        char_browse.clicked.connect(self._on_character_browse)
+        char_row.addWidget(char_browse)
+        char_clear = QPushButton("✕")
+        char_clear.setFixedWidth(28)
+        char_clear.setToolTip("Rimuovi l'immagine (torna a usare solo la LoRA)")
+        char_clear.clicked.connect(self._on_character_clear)
+        char_row.addWidget(char_clear)
+        v.addLayout(char_row)
+
+        iw_row = QHBoxLayout()
+        iw_row.addWidget(QLabel("Rinforzo identità:"))
+        self.ip_adapter_weight_slider = QSlider(Qt.Orientation.Horizontal)
+        self.ip_adapter_weight_slider.setMinimum(0)
+        self.ip_adapter_weight_slider.setMaximum(100)
+        self.ip_adapter_weight_slider.setValue(60)
+        self.ip_adapter_weight_slider.valueChanged.connect(
+            lambda v_: self.ip_adapter_weight_label.setText(f"{v_ / 100:.2f}")
+        )
+        iw_row.addWidget(self.ip_adapter_weight_slider, 1)
+        self.ip_adapter_weight_label = QLabel("0.60")
+        self.ip_adapter_weight_label.setFixedWidth(34)
+        iw_row.addWidget(self.ip_adapter_weight_label)
+        v.addLayout(iw_row)
+
+        pw_row = QHBoxLayout()
+        pw_row.addWidget(QLabel("Fedeltà posa:"))
+        self.pose_weight_slider = QSlider(Qt.Orientation.Horizontal)
+        self.pose_weight_slider.setMinimum(0)
+        self.pose_weight_slider.setMaximum(100)
+        self.pose_weight_slider.setValue(50)
+        self.pose_weight_slider.valueChanged.connect(
+            lambda v_: self.pose_weight_label.setText(f"{v_ / 100:.2f}")
+        )
+        pw_row.addWidget(self.pose_weight_slider, 1)
+        self.pose_weight_label = QLabel("0.50")
+        self.pose_weight_label.setFixedWidth(34)
+        pw_row.addWidget(self.pose_weight_label)
+        v.addLayout(pw_row)
+
+        dw_row = QHBoxLayout()
+        dw_row.addWidget(QLabel("Coerenza spaziale:"))
+        self.depth_weight_slider = QSlider(Qt.Orientation.Horizontal)
+        self.depth_weight_slider.setMinimum(0)
+        self.depth_weight_slider.setMaximum(100)
+        self.depth_weight_slider.setValue(0)
+        self.depth_weight_slider.setToolTip(
+            "Temporaneamente disattivato di default: il preprocessore MiDaS "
+            "richiede torch>=2.6 (non presente su questo setup). A 0 il "
+            "passaggio depth viene saltato del tutto — alzalo solo se hai "
+            "aggiornato torch e verificato che funzioni."
+        )
+        self.depth_weight_slider.valueChanged.connect(
+            lambda v_: self.depth_weight_label.setText(f"{v_ / 100:.2f}")
+        )
+        dw_row.addWidget(self.depth_weight_slider, 1)
+        self.depth_weight_label = QLabel("0.00")
+        self.depth_weight_label.setFixedWidth(34)
+        dw_row.addWidget(self.depth_weight_label)
+        v.addLayout(dw_row)
+
+        slider_hint = QLabel(
+            "Bassa fedeltà posa = più libertà anatomica al modello. "
+            "Se l'anatomia esce storta, abbassa entrambi gli slider. "
+            "\"Coerenza spaziale\" è disattivata di default (0) per un "
+            "problema noto del preprocessore — lasciala a 0."
+        )
+        slider_hint.setWordWrap(True)
+        slider_hint.setStyleSheet("color: #8a8d96; font-size: 10px;")
+        v.addWidget(slider_hint)
+
+        self.pose_generate_btn = QPushButton("Genera in questa posa")
+        self.pose_generate_btn.clicked.connect(self._on_pose_generate)
+        v.addWidget(self.pose_generate_btn)
+        return box
+
+    def _on_pose_browse(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Scegli foto di riferimento", "",
+            "Immagini (*.png *.jpg *.jpeg *.webp)",
+        )
+        if not path:
+            return
+        self._pose_photo_path = Path(path)
+        self.pose_photo_label.setText(self._pose_photo_path.name)
+        self.pose_photo_label.setStyleSheet("color: #cdd0d8;")
+
+    def _on_character_browse(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Scegli immagine di riferimento del personaggio", "",
+            "Immagini (*.png *.jpg *.jpeg *.webp)",
+        )
+        if not path:
+            return
+        self._character_photo_path = Path(path)
+        self.character_photo_label.setText(self._character_photo_path.name)
+        self.character_photo_label.setStyleSheet("color: #cdd0d8;")
+
+    def _on_character_clear(self) -> None:
+        self._character_photo_path = None
+        self.character_photo_label.setText("(nessuna immagine)")
+        self.character_photo_label.setStyleSheet("color: #8a8d96;")
+
+    def _on_pose_generate(self) -> None:
+        if self._project is None or self._client is None or self._wallet is None:
+            return
+        if self._worker is not None:
+            QMessageBox.information(
+                self, "Generazione in corso",
+                "Aspetta che finisca la generazione attuale prima di riprovare.",
+            )
+            return
+        if self._pose_photo_path is None or not self._pose_photo_path.exists():
+            QMessageBox.warning(
+                self, "Foto mancante", "Scegli prima una foto di riferimento.",
+            )
+            return
+        if self._comfy_input_dir is None:
+            QMessageBox.warning(
+                self, "Motore non pronto",
+                "Questa funzione richiede ComfyUI attivo. Riprova quando il motore è pronto.",
+            )
+            return
+        self._sync_model_to_project()
+
+        extra_loras = tuple(
+            spec for s in self.lora_slots if (spec := s.spec()) is not None
+        )
+        user_params = {
+            "pose": str(self._pose_photo_path),
+            "prompt": self.prompt.toPlainText(),
+            "negative": self.negative.toPlainText(),
+            "width": self.width_spin.value(),
+            "height": self.height_spin.value(),
+            "steps": self.steps_spin.value(),
+            "cfg": self.cfg_spin.value(),
+            "sampler": self.sampler_combo.currentText(),
+            "scheduler": self.scheduler_combo.currentText(),
+            "seed": self.seed_spin.value(),
+            "pose_weight": self.pose_weight_slider.value() / 100.0,
+            "depth_weight": self.depth_weight_slider.value() / 100.0,
+            "lora_weight": extra_loras[0][1] if extra_loras else 0.85,
+            "loras": [{"path": p, "weight": float(w)} for p, w in extra_loras],
+            "autofix_face": "yes" if self.autofix_face_check.isChecked() else "no",
+            "autofix_hands": "yes" if self.autofix_hands_check.isChecked() else "no",
+        }
+        if self._character_photo_path is not None:
+            user_params["character"] = str(self._character_photo_path)
+            user_params["ip_adapter_weight"] = self.ip_adapter_weight_slider.value() / 100.0
+        per_image = self._collect_form().estimate().per_image
+        if not self._wallet.can_afford(per_image):
+            QMessageBox.warning(
+                self, "Crediti insufficienti",
+                f"Servono {per_image:.2f} crediti, disponibili {self._wallet.balance:.2f}.",
+            )
+            return
+
+        self._launch_worker(
+            recipe=get_recipe(RecipeId.CHARACTER_IN_POSE),
+            user_params=user_params,
+            per_image_cost=per_image,
+            status_text="Generazione nella posa scelta in corso…",
+            clear_gallery=True,
+            reset_seed_capture=True,
+        )
 
     def _build_upscaler_group(self) -> QGroupBox:
         box = QGroupBox("Upscaler")
@@ -799,6 +1019,8 @@ class GenerateView(QWidget):
             upscale_factor=float(factor),
             extra_lora_count=len(extra_loras),
             extra_loras=extra_loras,
+            autofix_face=self.autofix_face_check.isChecked(),
+            autofix_hands=self.autofix_hands_check.isChecked(),
         )
 
     def _on_prompt_changed(self) -> None:

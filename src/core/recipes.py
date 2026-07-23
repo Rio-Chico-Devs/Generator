@@ -69,34 +69,54 @@ RECIPES: dict[RecipeId, RecipeDef] = {
                         help="-1 = casuale"),
             RecipeInput("lora_weight", "Forza stile", "number", default=0.85,
                         advanced=True),
+            RecipeInput("autofix_face", "Correggi volto", "choice",
+                        default="yes", choices=["yes", "no"], advanced=True,
+                        help="Ridisegna il volto in dettaglio (ADetailer)"),
+            RecipeInput("autofix_hands", "Correggi mani", "choice",
+                        default="yes", choices=["yes", "no"], advanced=True,
+                        help="Ridisegna le mani in dettaglio (ADetailer)"),
         ],
     ),
     RecipeId.CHARACTER_IN_POSE: RecipeDef(
         id=RecipeId.CHARACTER_IN_POSE,
-        name="Personaggio in posa",
+        name="Posa da foto",
         description=(
-            "Metti il tuo personaggio in una posa scelta, nel tuo stile, "
-            "con anatomia corretta."
+            "Ridisegna il tuo personaggio (LoRA attiva) nella stessa posa di "
+            "una foto di riferimento, nel tuo stile — accessori e identità "
+            "restano quelli del personaggio, cambia solo la posizione."
         ),
         workflow_file="character_in_pose.json",
         required_models=[
             "pony-v6-xl",
             "controlnet-openpose-sdxl",
-            "ipadapter-faceid-plus-v2",
+            "controlnet-depth-sdxl",
+            "ipadapter-plus-sdxl",
+            "clip-vision-vit-h",
         ],
-        priority_phase=3,
+        priority_phase=1,
         inputs=[
-            RecipeInput("pose", "Posa", "pose",
-                        help="Scegli dalla Pose Library o carica un'immagine"),
-            RecipeInput("character", "Personaggio", "character",
-                        help="1-3 immagini del personaggio"),
+            RecipeInput("pose", "Foto di riferimento", "pose",
+                        help="Una foto o disegno nella posa che vuoi replicare"),
+            RecipeInput("character", "Immagine personaggio (opzionale)", "character",
+                        required=False,
+                        help="Rinforza l'identità con un'immagine di riferimento del "
+                             "personaggio (via IP-Adapter), utile quando la LoRA da "
+                             "sola non basta. Lascia vuoto per usare solo la LoRA."),
             RecipeInput("prompt", "Descrizione", "text"),
             RecipeInput("negative", "Da evitare", "text", required=False,
                         default="low quality, worst quality, bad hands, deformed"),
-            RecipeInput("pose_weight", "Fedeltà posa", "number", default=0.9,
-                        advanced=True),
-            RecipeInput("face_weight", "Fedeltà personaggio", "number",
-                        default=0.7, advanced=True),
+            RecipeInput("pose_weight", "Fedeltà posa", "number", default=0.5,
+                        advanced=True,
+                        help="Bassa = più libertà anatomica, alta = segue lo scheletro alla lettera"),
+            RecipeInput("depth_weight", "Coerenza spaziale", "number",
+                        default=0.0, advanced=True,
+                        help="Rinforza le proporzioni/profondità senza irrigidire la posa. "
+                             "0 = disattivo (default): il preprocessore MiDaS richiede "
+                             "torch>=2.6, non ancora supportato su questo setup."),
+            RecipeInput("ip_adapter_weight", "Rinforzo identità (immagine)", "number",
+                        default=0.6, advanced=True,
+                        help="Quanto pesa l'immagine di riferimento del personaggio "
+                             "(solo se fornita) rispetto alla LoRA/prompt."),
             RecipeInput("lora_weight", "Forza stile", "number", default=0.85,
                         advanced=True),
             RecipeInput("autofix_hands", "Correggi mani", "choice",

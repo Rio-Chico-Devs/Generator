@@ -31,8 +31,9 @@ def test_recipes_for_phase_is_monotonic():
     p5 = {r.id for r in recipes_for_phase(5)}
     assert p1.issubset(p5)
     assert RecipeId.BASE in p1
-    assert RecipeId.CHARACTER_IN_POSE not in p1
-    assert RecipeId.CHARACTER_IN_POSE in p5
+    assert RecipeId.CHARACTER_IN_POSE in p1
+    assert RecipeId.PRODUCT_IN_SCENE not in p1
+    assert RecipeId.PRODUCT_IN_SCENE in p5
 
 
 def test_recipe_inputs_have_unique_keys():

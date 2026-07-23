@@ -90,6 +90,11 @@ def generate_toml(
         # Paths
         "pretrained_model_name_or_path": str(base_model_path),
         "train_data_dir": str(dataset_dir),
+        # Il resto dell'app (Dataset Inspector, prepare_dataset) scrive/legge
+        # caption in file .txt; senza dirlo esplicitamente a sd-scripts, il
+        # suo default (.caption) fa ignorare TUTTE le caption in silenzio —
+        # il training procede solo col tag attivatore, senza errori visibili.
+        "caption_extension": ".txt",
         "output_dir": str(checkpoints_dir),
         "output_name": "lora",
         "save_model_as": "safetensors",
@@ -131,6 +136,13 @@ def generate_toml(
         "sample_prompts": str(prompts_path),
         "sample_sampler": preset.sample_sampler,
         "sample_at_first": True,
+        # Stato per --resume (ottimizzatore/scheduler/RNG, non solo i pesi):
+        # senza questo "Riprendi da crash" punterebbe --resume a un file
+        # .safetensors, che sd-scripts rifiuta o interpreta male. Teniamo solo
+        # l'ultimo stato salvato (save_last_n_epochs_state=1): ogni stato pesa
+        # quanto il checkpoint stesso, tenerli tutti satura il disco in fretta.
+        "save_state": True,
+        "save_last_n_epochs_state": 1,
     }
 
     # Bucket (SDXL)
@@ -144,10 +156,13 @@ def generate_toml(
     if preset.cache_latents_to_disk:
         cfg["cache_latents_to_disk"] = True
 
-    # Cache text encoder outputs (risparmia VRAM significativa su SDXL)
-    if preset.cache_text_encoder_outputs:
+    # Cache text encoder outputs (risparmia VRAM significativa su SDXL).
+    # Incompatibile con l'addestramento del text encoder (sd-scripts lo
+    # rifiuta): se train_text_encoder è attivo, la cache va disabilitata
+    # anche se il preset la richiederebbe di default.
+    if preset.cache_text_encoder_outputs and not params.train_text_encoder:
         cfg["cache_text_encoder_outputs"] = True
-    if preset.cache_text_encoder_outputs_to_disk:
+    if preset.cache_text_encoder_outputs_to_disk and not params.train_text_encoder:
         cfg["cache_text_encoder_outputs_to_disk"] = True
 
     # VAE SDXL: no_half_vae evita artefatti in bf16

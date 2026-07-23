@@ -72,7 +72,18 @@ def _format_submit_error(body: str) -> str:
     for node_id, info in node_errors.items():
         klass = info.get("class_type", "?") if isinstance(info, dict) else "?"
         for e in (info.get("errors", []) if isinstance(info, dict) else []):
-            parts.append(f"[nodo {node_id} {klass}] {e.get('message', '')}".strip())
+            piece = f"[nodo {node_id} {klass}] {e.get('message', '')}".strip()
+            # ComfyUI mette il campo/valore incriminato in "details" o
+            # "extra_info" (es. quale input di un COMBO e cosa si aspettava) —
+            # senza questo, "Value not in list" non dice MAI quale campo sia,
+            # costringendo a indovinare invece di leggere il log.
+            details = e.get("details")
+            if details:
+                piece += f": {details}"
+            extra = e.get("extra_info")
+            if extra:
+                piece += f" ({extra})"
+            parts.append(piece)
 
     return " · ".join(p for p in parts if p)
 
@@ -89,6 +100,7 @@ class ComfyClientProtocol(Protocol):
     def interrupt(self) -> None: ...
     def clear_queue(self) -> None: ...
     def get_vram_usage(self) -> dict: ...
+    def free_memory(self) -> None: ...
 
 
 class ComfyClient:
@@ -203,19 +215,13 @@ class ComfyClient:
                         if self._is_finished(prompt_id):
                             break  # completato, messaggio finale perso
                         if not self.is_alive():
-                            raise ComfyError(
-                                "ComfyUI non risponde più (possibile crash). "
-                                "Controlla logs/comfyui.log."
-                            )
+                            raise ComfyError(self._crash_message())
                         idle_since = time.monotonic()  # resetta per evitare re-trigger
                     continue
                 except websocket.WebSocketConnectionClosedException:
                     if self._is_finished(prompt_id):
                         break
-                    raise ComfyError(
-                        "Connessione a ComfyUI chiusa durante l'esecuzione "
-                        "(possibile crash). Controlla logs/comfyui.log."
-                    )
+                    raise ComfyError(self._crash_message())
 
                 if not isinstance(msg, str):
                     continue  # frame binario (anteprima) — ignora
@@ -261,6 +267,18 @@ class ComfyClient:
             )
         return ComfyError(f"Esecuzione fallita sul nodo '{node_type}': {exc_msg}")
 
+    def _crash_message(self) -> str:
+        """Messaggio per un possibile crash di ComfyUI: prova a riconoscere la
+        causa dalla coda del log (pagefile, RAM, VRAM) prima del generico."""
+        from src.comfy.diagnostics import diagnose
+        from src.utils.paths import get_app_data_dir
+
+        log_path = get_app_data_dir() / "logs" / "comfyui.log"
+        return diagnose(log_path) or (
+            "Connessione a ComfyUI chiusa durante l'esecuzione (possibile "
+            "crash). Controlla logs/comfyui.log."
+        )
+
     def _is_finished(self, prompt_id: str) -> bool:
         """True se il prompt risulta completato in history."""
         import urllib.error
@@ -297,6 +315,33 @@ class ComfyClient:
                 pass
         except Exception as exc:
             logger.warning("clear_queue() HTTP error: %s", exc)
+
+    def free_memory(self) -> None:
+        """Chiede a ComfyUI di scaricare i modelli caricati e liberare
+        memoria (endpoint nativo ``POST /free``).
+
+        Su PC con poca RAM, tenere il checkpoint precedente ancora in memoria
+        mentre se ne carica uno nuovo (es. prima del refine, o tra una
+        generazione e l'altra) è ciò che spinge la RAM al limite e causa i
+        crash in caricamento. Chiamarlo prima di ogni submit riduce la
+        pressione di memoria senza richiedere modifiche di sistema (pagefile
+        ecc.) — non fatale se fallisce: la generazione prosegue comunque."""
+        import json
+        import urllib.request
+
+        payload = json.dumps(
+            {"unload_models": True, "free_memory": True}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base}/free",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15):
+                pass
+        except Exception as exc:
+            logger.warning("free_memory() fallita (non fatale): %s", exc)
 
     def get_vram_usage(self) -> dict:
         """GET /system_stats per la status bar. Ritorna {} se irraggiungibile."""
@@ -382,6 +427,9 @@ class MockComfyClient:
         pass
 
     def clear_queue(self) -> None:
+        pass
+
+    def free_memory(self) -> None:
         pass
 
     def get_vram_usage(self) -> dict:

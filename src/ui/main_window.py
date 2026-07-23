@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Optional
 if TYPE_CHECKING:
     from src.core.app_config import AppConfig
 
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -136,6 +136,8 @@ class MainWindow(QMainWindow):
         self._comfy_server = None
         self._comfy_starter: Optional[_ComfyStarter] = None
         self._comfy_client = None
+        self._comfy_restart_attempts = 0
+        self._shutting_down = False
 
         from src.core.app_config import AppConfig as _AppConfig
         self._app_config = app_config or _AppConfig()
@@ -155,6 +157,14 @@ class MainWindow(QMainWindow):
         self._build_ui()
         self._refresh_projects_list()
         self._start_comfy()
+
+        # Rileva un crash di ComfyUI (es. access violation / pagefile) e lo
+        # riavvia da solo entro un limite di tentativi, invece di lasciare
+        # l'app bloccata su "Comfy: errore" finché l'utente non la riavvia.
+        self._comfy_health_timer = QTimer(self)
+        self._comfy_health_timer.setInterval(5000)
+        self._comfy_health_timer.timeout.connect(self._check_comfy_health)
+        self._comfy_health_timer.start()
 
         if not skip_model_check:
             self._maybe_show_first_run_dialog()
@@ -465,6 +475,7 @@ class MainWindow(QMainWindow):
         from src.comfy.client import ComfyClient
         self._comfy_client = ComfyClient(port=port)
         self._comfy_state = f"pronto:{port}"
+        self._comfy_restart_attempts = 0  # riavvio riuscito: azzera il contatore
         logger.info("ComfyUI pronto su porta %d", port)
         gv = getattr(self, "_generate_view", None)
         if gv is not None:
@@ -482,6 +493,52 @@ class MainWindow(QMainWindow):
         logger.error("ComfyUI avvio fallito: %s", msg)
         self._comfy_state = "errore"
         self._render_status()
+
+    # Tentativi massimi di riavvio automatico prima di arrendersi e mostrare
+    # la diagnosi all'utente (evita loop infiniti su un crash persistente,
+    # es. pagefile non ancora sistemato).
+    _MAX_COMFY_RESTARTS = 3
+
+    def _check_comfy_health(self) -> None:
+        """Polling periodico: rileva se il processo ComfyUI è morto senza
+        preavviso (crash) mentre l'app lo credeva pronto, e lo riavvia da solo
+        entro un limite di tentativi."""
+        if self._shutting_down or self.mock or self._comfy_server is None:
+            return
+        if not self._comfy_state.startswith("pronto"):
+            return  # non ancora pronto, in avvio, o già in errore/riavvio
+        if self._comfy_server.is_running():
+            return  # tutto ok
+
+        logger.error("ComfyUI crashato inaspettatamente (era pronto)")
+        if self._comfy_restart_attempts >= self._MAX_COMFY_RESTARTS:
+            self._comfy_state = "crashato — riavvii falliti"
+            self._render_status()
+            self._show_crash_diagnosis()
+            self._comfy_health_timer.stop()
+            return
+
+        self._comfy_restart_attempts += 1
+        self._comfy_state = (
+            f"riavvio dopo crash ({self._comfy_restart_attempts}/"
+            f"{self._MAX_COMFY_RESTARTS})…"
+        )
+        self._render_status()
+        self._start_comfy()
+
+    def _show_crash_diagnosis(self) -> None:
+        """Mostra la causa del crash (se riconosciuta dal log) e come
+        risolverla, invece di lasciare l'app bloccata senza spiegazioni."""
+        from src.comfy.diagnostics import diagnose
+        from src.utils.paths import get_app_data_dir
+
+        log_path = get_app_data_dir() / "logs" / "comfyui.log"
+        diagnosis = diagnose(log_path) or (
+            "ComfyUI ha smesso di rispondere e i tentativi di riavvio "
+            "automatico sono falliti.\n\n"
+            "Controlla logs/comfyui.log per i dettagli, poi riavvia l'app."
+        )
+        QMessageBox.critical(self, "ComfyUI non riparte", diagnosis)
 
     def _start_gpu_monitor(self) -> None:
         """Avvia il polling GPU in un thread separato (no freeze UI)."""
@@ -551,6 +608,11 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         """Ferma thread e processi figli prima di chiudere (no orfani)."""
+        self._shutting_down = True
+        timer = getattr(self, "_comfy_health_timer", None)
+        if timer is not None:
+            timer.stop()
+
         wallet = getattr(self, "_wallet", None)
         if wallet is not None:
             try:

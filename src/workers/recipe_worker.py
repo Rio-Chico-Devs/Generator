@@ -181,6 +181,16 @@ class RecipeWorker(QThread):
                 seed_i = (base_seed + i) if user_gave_seed else resolve_seed(-1)
                 wf.set_seed(seed_i)
 
+                # Scarica il modello precedente PRIMA di caricarne uno nuovo:
+                # su PC con poca RAM, tenerli entrambi in memoria durante la
+                # transizione è ciò che spinge la RAM al limite e causa i
+                # crash in caricamento (alternativa non invasiva al pagefile,
+                # non richiede modifiche di sistema). Non fatale se fallisce.
+                try:
+                    self._client.free_memory()
+                except Exception as exc:
+                    logger.warning("free_memory() prima del submit fallita: %s", exc)
+
                 prompt_id = self._client.submit(wf.build())
                 logger.info(
                     "Ricetta '%s' img %d/%d sottomessa — prompt_id=%s seed=%d",
@@ -265,7 +275,7 @@ class RecipeWorker(QThread):
 # a set_role nel loop residuo.
 _HANDLED_KEYS = frozenset(
     {"prompt", "scene_prompt", "negative", "seed", "width", "height",
-     "lora_weight", "loras", "variants", "batch"}
+     "lora_weight", "loras", "variants", "batch", "autofix_face", "autofix_hands"}
 )
 
 
@@ -387,6 +397,26 @@ def _parametrize(
         node_spec = wf.mapping.get(inp.key)
         if node_spec and "node" in node_spec:
             wf.set_input_image(node_spec["node"], dest_name)
+
+    # 6b. ADetailer (volto/mani): collega o salta i nodi FaceDetailer in base
+    #     alla scelta utente. No-op sui workflow che non li hanno (mapping
+    #     assente) — nessun nodo inutile viene eseguito quando bypassato,
+    #     ComfyUI esegue solo il ramo raggiungibile da SaveImage.
+    _wire_autofix(wf, user_params)
+
+    # 6c. Depth ControlNet (rinforzo opzionale in "Posa da foto"): salta
+    #     l'intero ramo MiDaS->ControlNet se depth_weight<=0, cosa diversa
+    #     da mettere la sola forza a 0 — qui il nodo MiDaS non viene proprio
+    #     eseguito, quindi non serve nemmeno che funzioni (utile finché
+    #     richiede torch>=2.6 e non lo si vuole aggiornare). No-op sui
+    #     workflow senza questi ruoli mappati.
+    _wire_depth_bypass(wf, user_params)
+
+    # 6d. IP-Adapter (rinforzo identità opzionale in "Posa da foto"): salta
+    #     l'intero ramo se non è stata data un'immagine 'character' — la LoRA
+    #     resta l'unica fonte di identità in quel caso (comportamento
+    #     storico). No-op sui workflow senza questi ruoli mappati.
+    _wire_ipadapter_bypass(wf, user_params)
 
     # 7. Knob numerici residui (steps, cfg, denoise…)
     #    Passati via set_role se presenti nel mapping; chiavi sconosciute ignorate.
@@ -511,6 +541,91 @@ def _safe_set_dimensions(wf: WorkflowTemplate, width: int, height: int) -> None:
         wf.set_dimensions(width, height)
     except KeyError as exc:
         logger.warning("Mapping dimensioni mancante nel workflow: %s", exc)
+
+
+def _wire_autofix(wf: WorkflowTemplate, user_params: dict[str, Any]) -> None:
+    """Collega o salta i FaceDetailer (ADetailer) volto/mani in base alle
+    scelte utente ("yes"/"no", default "yes").
+
+    Il grafo ha SEMPRE entrambi i nodi FaceDetailer: qui si sceglie solo da
+    dove legge SaveImage. Un ramo non raggiunto da SaveImage non viene
+    eseguito da ComfyUI, quindi disattivare un fix costa zero, non serve
+    rimuovere nodi. Se il workflow non ha questi ruoli mappati (workflow più
+    vecchi, es. refine/inpaint), non fa nulla."""
+    final_spec = wf.mapping.get("final_output")
+    vae_spec = wf.mapping.get("vae_decode")
+    face_in = wf.mapping.get("face_detailer_in")
+    face_out = wf.mapping.get("face_detailer_out")
+    hand_in = wf.mapping.get("hand_detailer_in")
+    hand_out = wf.mapping.get("hand_detailer_out")
+    if not (final_spec and vae_spec and face_in and face_out and hand_in and hand_out):
+        return
+
+    want_face = str(user_params.get("autofix_face", "yes")).lower() != "no"
+    want_hands = str(user_params.get("autofix_hands", "yes")).lower() != "no"
+
+    source = [vae_spec["node"], 0]
+    if want_face:
+        wf.set_param(face_in["node"], face_in["field"], source)
+        source = [face_out["node"], 0]
+    if want_hands:
+        wf.set_param(hand_in["node"], hand_in["field"], source)
+        source = [hand_out["node"], 0]
+    wf.set_param(final_spec["node"], final_spec["field"], source)
+
+
+def _wire_depth_bypass(wf: WorkflowTemplate, user_params: dict[str, Any]) -> None:
+    """Salta l'intero ramo depth ControlNet (MiDaS + ControlNetApply) se
+    ``depth_weight`` è 0 o assente: il KSampler legge il conditioning da
+    prima del passaggio depth invece che da dopo.
+
+    Diverso dal solo mettere la forza a 0: qui il nodo MiDaS non viene
+    proprio eseguito da ComfyUI (non reachable dall'output), quindi non
+    serve nemmeno che sia installato/funzionante. Non fa nulla sui workflow
+    senza questi ruoli mappati (es. refine/inpaint/base)."""
+    ks_pos = wf.mapping.get("ksampler_positive_in")
+    ks_neg = wf.mapping.get("ksampler_negative_in")
+    pose_out = wf.mapping.get("pose_conditioning_out")
+    depth_out = wf.mapping.get("depth_conditioning_out")
+    if not (ks_pos and ks_neg and pose_out and depth_out):
+        return
+
+    try:
+        depth_weight = float(user_params.get("depth_weight", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        depth_weight = 0.0
+
+    source = depth_out["node"] if depth_weight > 0.0 else pose_out["node"]
+    wf.set_param(ks_pos["node"], ks_pos["field"], [source, 0])
+    wf.set_param(ks_neg["node"], ks_neg["field"], [source, 1])
+
+
+def _wire_ipadapter_bypass(wf: WorkflowTemplate, user_params: dict[str, Any]) -> None:
+    """Salta l'intero ramo IP-Adapter (rinforzo identità da immagine) se non
+    è stata fornita un'immagine 'character': i consumatori del modello
+    (KSampler, FaceDetailer volto/mani) leggono direttamente dall'uscita
+    della LoRA invece che dall'uscita di IPAdapter.
+
+    Come per il bypass depth: il nodo IPAdapter non viene proprio eseguito
+    da ComfyUI quando bypassato (non reachable dall'output), quindi non
+    serve nemmeno che il custom node sia installato se non lo si usa. No-op
+    sui workflow senza questi ruoli mappati (es. base/refine/inpaint)."""
+    ks_model_in = wf.mapping.get("ksampler_model_in")
+    face_model_in = wf.mapping.get("face_detailer_model_in")
+    hand_model_in = wf.mapping.get("hand_detailer_model_in")
+    lora_out = wf.mapping.get("lora_model_out")
+    ipadapter_out = wf.mapping.get("ipadapter_model_out")
+    if not (ks_model_in and lora_out and ipadapter_out):
+        return
+
+    has_character_image = bool(user_params.get("character"))
+    source = ipadapter_out["node"] if has_character_image else lora_out["node"]
+
+    wf.set_param(ks_model_in["node"], ks_model_in["field"], [source, 0])
+    if face_model_in:
+        wf.set_param(face_model_in["node"], face_model_in["field"], [source, 0])
+    if hand_model_in:
+        wf.set_param(hand_model_in["node"], hand_model_in["field"], [source, 0])
 
 
 def _collect_lora_specs(
